@@ -33,10 +33,10 @@ impl Resolver for StaticResolver {
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    // These two addresses must actually be assigned to the TUN interface
-    // at the OS level (link-local is usually auto-assigned by the kernel
-    // when the interface comes up with IPv6 enabled; the ULA address you
-    // assign yourself). This crate does not do interface configuration.
+    // These two addresses must actually be assigned to your interface at
+    // the OS level (link-local is usually auto-assigned by the kernel when
+    // the interface comes up with IPv6 enabled; the ULA address you assign
+    // yourself). This crate does not do interface configuration.
     let link_local: Ipv6Addr = "fe80::1".parse()?;
     let dns_server_addr: Ipv6Addr = "fd00:aaaa::1".parse()?;
 
@@ -56,19 +56,20 @@ async fn main() -> anyhow::Result<()> {
         server_addr: dns_server_addr,
     };
 
-    // --- dns-announce side: just channels, no knowledge of tun-rs at all ---
+    // --- dns-announce side: just channels, no knowledge of the transport ---
     let (incoming_tx, incoming_rx) = mpsc::channel::<Vec<u8>>(256);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<Vec<u8>>(256);
 
     DnsAnnounce::new(ra_cfg, dns_cfg).spawn(incoming_rx, outgoing_tx, resolver);
 
-    // --- bridge side: this is the only part that knows about tun-rs ---
-    // Construction of the device itself + assigning `link_local` and
-    // `dns_server_addr` to it is platform-specific setup that lives in
-    // your existing interface bring-up code.
+    // --- bridge side: the only part tied to a concrete packet source.
+    // Here that's a virtual interface via `tun-rs`; swap in io_uring, a
+    // raw socket, or anything else that gives you IPv6 frames. Creating
+    // the device and assigning `link_local` / `dns_server_addr` to it is
+    // platform-specific setup that lives in your own bring-up code.
     let device = Arc::new(tun_rs::DeviceBuilder::new().build_async()?);
 
-    // Reader: tun -> incoming_tx. Whatever else consumes this link's
+    // Reader: device -> incoming_tx. Whatever else consumes this link's
     // non-DNS/non-RS traffic, you'll want to fan this out upstream of
     // dns-announce rather than only feeding it here (see lib.rs docs).
     let reader_device = device.clone();
@@ -82,19 +83,19 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 Err(e) => {
-                    log::error!("tun read error: {e}");
+                    log::error!("device read error: {e}");
                     break;
                 }
             }
         }
     });
 
-    // Writer: outgoing_rx -> tun.
+    // Writer: outgoing_rx -> device.
     let writer_device = device.clone();
     tokio::spawn(async move {
         while let Some(pkt) = outgoing_rx.recv().await {
             if let Err(e) = writer_device.send(&pkt).await {
-                log::warn!("tun write error: {e}");
+                log::warn!("device write error: {e}");
             }
         }
     });

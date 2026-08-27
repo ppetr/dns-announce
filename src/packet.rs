@@ -1,5 +1,6 @@
-//! Minimal, dependency-free helpers for building raw IPv6 / ICMPv6 / UDP
-//! packets that are written directly into the TUN device.
+//! Minimal, dependency-free helpers for building and parsing raw IPv6 /
+//! ICMPv6 / UDP packets - the wire form of everything that flows through
+//! this crate's inbound and outbound channels.
 //!
 //! We do this by hand (instead of pulling in `pnet` or similar) so the
 //! module stays small and easy to audit. Everything here assumes a plain

@@ -1,7 +1,7 @@
 //! Builds ICMPv6 Router Advertisements carrying the RDNSS (RFC 8106) and
 //! DNSSL options, so a stock OS IPv6 stack can auto-discover our DNS
-//! server and search domain over the TUN link without any
-//! platform-specific resolver configuration.
+//! server and search domain over the link without any platform-specific
+//! resolver configuration.
 //!
 //! Important RFC 4861 requirement: RA/RS packets MUST be sent with an
 //! IPv6 Hop Limit of 255, and the source address SHOULD be the router's
@@ -25,10 +25,10 @@ const OPT_DNSSL: u8 = 31;
 /// Configuration for the RA/RDNSS beacon.
 #[derive(Clone)]
 pub struct RaConfig {
-    /// Link-local source address of the TUN interface (fe80::/10).
+    /// Link-local source address of our interface on the link (fe80::/10).
     pub link_local_src: Ipv6Addr,
     /// Address(es) of the DNS resolver(s) to advertise (usually just our
-    /// own TUN address).
+    /// own address on this link).
     pub dns_servers: Vec<Ipv6Addr>,
     /// Search domain(s) to advertise via DNSSL, e.g. "myvpn".
     pub search_domains: Vec<String>,
@@ -100,8 +100,8 @@ fn build_dnssl_option(domains: &[String], lifetime_secs: u32) -> Vec<u8> {
 }
 
 /// Build a full IPv6 packet containing an ICMPv6 Router Advertisement with
-/// RDNSS + (optionally) DNSSL options, ready to be written straight into
-/// the TUN device.
+/// RDNSS + (optionally) DNSSL options, ready to push onto the outbound
+/// channel.
 pub fn build_router_advertisement(cfg: &RaConfig, dst: Ipv6Addr) -> Vec<u8> {
     let mut icmp = Vec::new();
     icmp.push(ICMPV6_RTR_ADVERT);

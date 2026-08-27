@@ -1,21 +1,21 @@
 //! Announce a DNS resolver to link-local IPv6 clients via RA/RDNSS
 //! (RFC 8106) so a stock OS IPv6 stack auto-discovers it, paired with a
-//! minimal built-in DNS server that answers the subset of queries an
-//! application-supplied filter accepts (e.g. one DNS suffix).
+//! minimal built-in DNS server that answers whichever queries an
+//! application-supplied resolver chooses to (e.g. one DNS suffix).
 //!
-//! This crate is deliberately transport-agnostic: it never touches a TUN
-//! device, socket, or any OS API directly. It consumes inbound IP packets
-//! from a `tokio::sync::mpsc::Receiver<In>`, where `In` is any
+//! This crate is deliberately transport-agnostic: it never touches a
+//! network device, socket, or any OS API directly. It consumes inbound IP
+//! packets from a `tokio::sync::mpsc::Receiver<In>`, where `In` is any
 //! `Deref<Target = [u8]>` that is `Send + 'static` - `Vec<u8>`,
 //! `bytes::Bytes`, `Box<[u8]>`, an io_uring buffer wrapper, whatever your
 //! transport hands you - and produces outbound IP packets as freshly
 //! allocated `Vec<u8>` on a `tokio::sync::mpsc::Sender<Vec<u8>>` (replies
 //! are small and synthesized from scratch, so there is nothing to gain
-//! from a custom buffer type on that side). Bridging those channels to an
-//! actual TUN device (tun-rs, tun2, io_uring, or anything else) is the
-//! caller's job - see `examples/basic.rs` for a tun-rs bridge. This keeps
-//! the crate trivially unit-testable (just push/pop byte buffers in
-//! tests) and immune to churn in any specific TUN crate's API.
+//! from a custom buffer type on that side). Bridging those channels to a
+//! real packet source - a virtual interface, io_uring, a test harness,
+//! anything - is the caller's job; see `examples/basic.rs`. This keeps the
+//! crate trivially unit-testable (just push/pop byte buffers in tests) and
+//! immune to churn in any specific device crate's API.
 //!
 //! ## What this does and doesn't do
 //! - It advertises `dns_servers`/`search_domains` via unsolicited Router
@@ -28,10 +28,10 @@
 //!   best-effort and pair it with a platform-specific resolver
 //!   configuration fallback for production use.
 //! - You are still responsible for assigning `link_local_src` and
-//!   `dns_config.server_addr` as real addresses on the TUN interface, and
-//!   for bridging the interface's raw packet I/O to the channels this
-//!   crate uses - this module only handles the packets once they're
-//!   flowing through those channels.
+//!   `dns_config.server_addr` as real addresses on your interface, and for
+//!   bridging its raw packet I/O to the channels this crate uses - this
+//!   module only handles the packets once they're flowing through those
+//!   channels.
 
 pub mod dns;
 pub mod packet;
@@ -60,7 +60,7 @@ impl DnsAnnounce {
     /// - a periodic beacon that pushes unsolicited Router Advertisements
     ///   onto `outgoing`
     /// - a dispatcher that consumes every packet from `incoming` (i.e.
-    ///   everything your TUN bridge reads off the device) and, for Router
+    ///   everything your bridge reads off the link) and, for Router
     ///   Solicitations or DNS queries sent to our resolver address, pushes
     ///   a reply onto `outgoing`; anything else is silently ignored so it
     ///   can fall through to whatever else is consuming `incoming`

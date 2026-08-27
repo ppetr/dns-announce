@@ -1,7 +1,7 @@
 //! Full-stack tests: drive `DnsAnnounce` through nothing but its inbound
 //! and outbound channels, with the tokio clock paused so the RA beacon is
-//! deterministic. No TUN device, no sockets - just `Vec<u8>` in, `Vec<u8>`
-//! out, crafted/parsed with the crate's own `packet` helpers.
+//! deterministic. No real transport, no sockets - just `Vec<u8>` in,
+//! `Vec<u8>` out, crafted/parsed with the crate's own `packet` helpers.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
