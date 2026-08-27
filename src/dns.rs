@@ -34,9 +34,8 @@ const ANSWER_TTL: u32 = 60;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Query {
-    /// Queried name as it appeared on the wire, without the trailing dot,
-    /// e.g. "foo.myvpn". DNS names are case-insensitive; normalize in your
-    /// [`Filter`]/[`Resolver`] if you need to.
+    /// Queried name without the trailing dot, ASCII-lowercased (DNS names
+    /// are case-insensitive), e.g. "foo.myvpn".
     pub name: String,
     /// Record type requested.
     pub kind: RecordKind,
@@ -105,12 +104,18 @@ pub struct DnsConfig {
     pub server_addr: Ipv6Addr,
 }
 
-/// True if `name` equals `suffix` or ends with `.suffix` - the ready-made
-/// check for a [`Resolver`] that serves a single DNS suffix (return
-/// [`Reply::NotMine`] when this is false). `suffix` is given WITHOUT a
-/// leading dot, e.g. "myvpn".
+/// True if `name` falls under `suffix`: it equals `suffix`, or ends with
+/// `.suffix` on a label boundary. Comparison is ASCII case-insensitive,
+/// as DNS names are. The ready-made check for a [`Resolver`] that serves
+/// a single DNS suffix (return [`Reply::NotMine`] when this is false).
+/// `suffix` is given WITHOUT a leading dot, e.g. "myvpn".
 pub fn matches_suffix(name: &str, suffix: &str) -> bool {
-    name == suffix || name.ends_with(&format!(".{suffix}"))
+    let (name, suffix) = (name.as_bytes(), suffix.as_bytes());
+    let Some(head_len) = name.len().checked_sub(suffix.len()) else {
+        return false;
+    };
+    let (head, tail) = name.split_at(head_len);
+    tail.eq_ignore_ascii_case(suffix) && (head.is_empty() || head.last() == Some(&b'.'))
 }
 
 /// Handle one inbound raw IPv6 packet read from the interface. Returns the
@@ -129,7 +134,7 @@ pub async fn handle_packet(
     let packet = Packet::parse(udp.payload).ok()?;
     let question = packet.questions.first()?;
     let query = Query {
-        name: question.qname.to_string(),
+        name: question.qname.to_string().to_ascii_lowercase(),
         kind: RecordKind::from_qtype(question.qtype),
     };
 
@@ -180,4 +185,57 @@ pub async fn handle_packet(
         &dns_payload,
         64,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suffix_matches_exact_name_and_subdomains() {
+        assert!(matches_suffix("myvpn", "myvpn"));
+        assert!(matches_suffix("foo.myvpn", "myvpn"));
+        assert!(matches_suffix("a.b.c.myvpn", "myvpn"));
+    }
+
+    #[test]
+    fn suffix_match_is_ascii_case_insensitive() {
+        assert!(matches_suffix("MyVPN", "myvpn"));
+        assert!(matches_suffix("Foo.MYVPN", "myvpn"));
+        assert!(matches_suffix("foo.myvpn", "MyVpn"));
+    }
+
+    #[test]
+    fn suffix_rejects_partial_and_unrelated_names() {
+        // A shared tail that does not sit on a label boundary must not match.
+        assert!(!matches_suffix("notmyvpn", "myvpn"));
+        assert!(!matches_suffix("xmyvpn", "myvpn"));
+        // The suffix as a leading label is not a match either.
+        assert!(!matches_suffix("myvpn.example", "myvpn"));
+        assert!(!matches_suffix("", "myvpn"));
+        assert!(!matches_suffix("example.com", "myvpn"));
+    }
+
+    #[test]
+    fn record_kind_maps_address_qtypes() {
+        assert_eq!(RecordKind::from_qtype(QTYPE::TYPE(TYPE::A)), RecordKind::A);
+        assert_eq!(
+            RecordKind::from_qtype(QTYPE::TYPE(TYPE::AAAA)),
+            RecordKind::Aaaa
+        );
+    }
+
+    #[test]
+    fn record_kind_collapses_everything_else_to_other() {
+        for qtype in [
+            QTYPE::TYPE(TYPE::MX),
+            QTYPE::TYPE(TYPE::TXT),
+            QTYPE::TYPE(TYPE::CNAME),
+            QTYPE::TYPE(TYPE::NS),
+            QTYPE::ANY,
+            QTYPE::AXFR,
+        ] {
+            assert_eq!(RecordKind::from_qtype(qtype), RecordKind::Other);
+        }
+    }
 }
