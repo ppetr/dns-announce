@@ -1,0 +1,16 @@
+[package]
+name = "dns-announce"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+simple-dns = "0.7"
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tun-rs = { version = "2", features = ["async"] }
+anyhow = "1"
+env_logger = "0.11"
