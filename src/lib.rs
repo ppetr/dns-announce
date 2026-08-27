@@ -4,12 +4,17 @@
 //! application-supplied filter accepts (e.g. one DNS suffix).
 //!
 //! This crate is deliberately transport-agnostic: it never touches a TUN
-//! device, socket, or any OS API directly. It only consumes raw IP
-//! packets from a `tokio::sync::mpsc::Receiver<Vec<u8>>` and produces raw
-//! IP packets on a `tokio::sync::mpsc::Sender<Vec<u8>>`. Bridging those
-//! channels to an actual TUN device (tun-rs, tun2, or anything else) is
-//! the caller's job - see `examples/basic.rs` for a tun-rs bridge. This
-//! keeps the crate trivially unit-testable (just push/pop `Vec<u8>` in
+//! device, socket, or any OS API directly. It consumes inbound IP packets
+//! from a `tokio::sync::mpsc::Receiver<In>`, where `In` is any
+//! `Deref<Target = [u8]>` that is `Send + 'static` - `Vec<u8>`,
+//! `bytes::Bytes`, `Box<[u8]>`, an io_uring buffer wrapper, whatever your
+//! transport hands you - and produces outbound IP packets as freshly
+//! allocated `Vec<u8>` on a `tokio::sync::mpsc::Sender<Vec<u8>>` (replies
+//! are small and synthesized from scratch, so there is nothing to gain
+//! from a custom buffer type on that side). Bridging those channels to an
+//! actual TUN device (tun-rs, tun2, io_uring, or anything else) is the
+//! caller's job - see `examples/basic.rs` for a tun-rs bridge. This keeps
+//! the crate trivially unit-testable (just push/pop byte buffers in
 //! tests) and immune to churn in any specific TUN crate's API.
 //!
 //! ## What this does and doesn't do
@@ -37,6 +42,7 @@ use ra::{
     build_router_advertisement, is_router_solicitation, solicitation_src, RaConfig,
     ALL_NODES_MULTICAST,
 };
+use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -54,21 +60,26 @@ impl DnsAnnounce {
     /// - a periodic beacon that pushes unsolicited Router Advertisements
     ///   onto `outgoing`
     /// - a dispatcher that consumes every packet from `incoming` (i.e.
-    ///   everything your TUN bridge reads off the device) and, for
-    ///   Router Solicitations or DNS queries sent to our resolver address,
-    ///   pushes a reply onto `outgoing`; anything else is silently ignored
-    ///   so it can
-    ///   fall through to whatever else is consuming `incoming` upstream
-    ///   of this, if you're sharing it.
+    ///   everything your TUN bridge reads off the device) and, for Router
+    ///   Solicitations or DNS queries sent to our resolver address, pushes
+    ///   a reply onto `outgoing`; anything else is silently ignored so it
+    ///   can fall through to whatever else is consuming `incoming`
+    ///   upstream of this, if you're sharing it.
+    ///
+    /// `incoming` may carry any `Deref<Target = [u8]>` (`Vec<u8>`,
+    /// `bytes::Bytes`, an io_uring buffer wrapper, ...); only the bytes
+    /// are ever read. Replies are always freshly allocated `Vec<u8>`.
     ///
     /// Both tasks stop cleanly once `outgoing` has no more live
     /// receivers (send fails) or `incoming` closes (recv returns None).
-    pub fn spawn(
+    pub fn spawn<In>(
         self,
-        incoming: mpsc::Receiver<Vec<u8>>,
+        incoming: mpsc::Receiver<In>,
         outgoing: mpsc::Sender<Vec<u8>>,
         resolver: Arc<dyn Resolver>,
-    ) {
+    ) where
+        In: Deref<Target = [u8]> + Send + 'static,
+    {
         let beacon_cfg = self.ra_cfg.clone();
         let beacon_out = outgoing.clone();
         tokio::spawn(async move {
@@ -101,16 +112,19 @@ async fn ra_beacon_loop(outgoing: mpsc::Sender<Vec<u8>>, cfg: RaConfig) {
 /// packets to go somewhere too (e.g. other data traffic sharing the
 /// link), fan `incoming` out upstream of this crate rather than trying to
 /// reuse the same receiver for both purposes.
-async fn dispatch_loop(
-    mut incoming: mpsc::Receiver<Vec<u8>>,
+async fn dispatch_loop<In>(
+    mut incoming: mpsc::Receiver<In>,
     outgoing: mpsc::Sender<Vec<u8>>,
     ra_cfg: RaConfig,
     dns_cfg: DnsConfig,
     resolver: Arc<dyn Resolver>,
-) {
+) where
+    In: Deref<Target = [u8]> + Send + 'static,
+{
     while let Some(pkt) = incoming.recv().await {
-        if is_router_solicitation(&pkt) {
-            if let Some(src) = solicitation_src(&pkt) {
+        let pkt: &[u8] = &pkt;
+        if is_router_solicitation(pkt) {
+            if let Some(src) = solicitation_src(pkt) {
                 let reply = build_router_advertisement(&ra_cfg, src);
                 if outgoing.send(reply).await.is_err() {
                     break;
@@ -119,7 +133,7 @@ async fn dispatch_loop(
             continue;
         }
 
-        if let Some(reply) = dns::handle_packet(&dns_cfg, resolver.as_ref(), &pkt).await {
+        if let Some(reply) = dns::handle_packet(&dns_cfg, resolver.as_ref(), pkt).await {
             if outgoing.send(reply).await.is_err() {
                 break;
             }
