@@ -10,7 +10,7 @@ simple-dns = "0.7"
 log = "0.4"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 tun-rs = { version = "2", features = ["async"] }
 anyhow = "1"
 env_logger = "0.11"
