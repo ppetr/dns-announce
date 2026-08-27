@@ -80,8 +80,8 @@ fn build_rdnss_option(servers: &[Ipv6Addr], lifetime_secs: u32) -> Vec<u8> {
 fn build_dnssl_option(domains: &[String], lifetime_secs: u32) -> Vec<u8> {
     let names = encode_dnssl_names(domains);
     let body_len = 4 + names.len(); // reserved(2)+lifetime(4)-2... see below
-    // header(type+len)=2 bytes, reserved=2, lifetime=4, then names, padded
-    // to an 8-byte multiple.
+                                    // header(type+len)=2 bytes, reserved=2, lifetime=4, then names, padded
+                                    // to an 8-byte multiple.
     let mut opt = Vec::new();
     opt.push(OPT_DNSSL);
     opt.push(0); // length placeholder, filled below
@@ -121,13 +121,7 @@ pub fn build_router_advertisement(cfg: &RaConfig, dst: Ipv6Addr) -> Vec<u8> {
     let csum = upper_layer_checksum(cfg.link_local_src, dst, 58, &icmp);
     icmp[2..4].copy_from_slice(&csum.to_be_bytes());
 
-    let ip_hdr = build_ipv6_header(
-        cfg.link_local_src,
-        dst,
-        58,
-        RA_HOP_LIMIT,
-        icmp.len() as u16,
-    );
+    let ip_hdr = build_ipv6_header(cfg.link_local_src, dst, 58, RA_HOP_LIMIT, icmp.len() as u16);
     let mut pkt = Vec::with_capacity(IPV6_HEADER_LEN + icmp.len());
     pkt.extend_from_slice(&ip_hdr);
     pkt.extend_from_slice(&icmp);

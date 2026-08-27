@@ -1,7 +1,7 @@
 //! Announce a DNS resolver to link-local IPv6 clients via RA/RDNSS
 //! (RFC 8106) so a stock OS IPv6 stack auto-discovers it, paired with a
-//! minimal built-in DNS server that answers a restricted set of queries
-//! (currently: one suffix).
+//! minimal built-in DNS server that answers the subset of queries an
+//! application-supplied filter accepts (e.g. one DNS suffix).
 //!
 //! This crate is deliberately transport-agnostic: it never touches a TUN
 //! device, socket, or any OS API directly. It only consumes raw IP
@@ -15,9 +15,9 @@
 //! ## What this does and doesn't do
 //! - It advertises `dns_servers`/`search_domains` via unsolicited Router
 //!   Advertisements sent to `ff02::1`, and answers Router Solicitations.
-//! - It only answers DNS queries for names ending in `suffix`; everything
-//!   else gets REFUSED so the OS's other resolvers (if any) can still
-//!   handle it.
+//! - The [`dns::Resolver`] decides per query whether to answer, return
+//!   NXDOMAIN, or disclaim it (REFUSED) so the OS's other resolvers (if
+//!   any) can still handle it - the classic case answers one suffix.
 //! - Platform support for RDNSS varies a lot - macOS/iOS in particular do
 //!   not implement it at all as of this writing. Treat RA/RDNSS as
 //!   best-effort and pair it with a platform-specific resolver
@@ -33,7 +33,10 @@ pub mod packet;
 pub mod ra;
 
 use dns::{DnsConfig, Resolver};
-use ra::{build_router_advertisement, is_router_solicitation, solicitation_src, RaConfig, ALL_NODES_MULTICAST};
+use ra::{
+    build_router_advertisement, is_router_solicitation, solicitation_src, RaConfig,
+    ALL_NODES_MULTICAST,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -52,8 +55,9 @@ impl DnsAnnounce {
     ///   onto `outgoing`
     /// - a dispatcher that consumes every packet from `incoming` (i.e.
     ///   everything your TUN bridge reads off the device) and, for
-    ///   Router Solicitations or in-suffix DNS queries, pushes a reply
-    ///   onto `outgoing`; anything else is silently ignored so it can
+    ///   Router Solicitations or DNS queries sent to our resolver address,
+    ///   pushes a reply onto `outgoing`; anything else is silently ignored
+    ///   so it can
     ///   fall through to whatever else is consuming `incoming` upstream
     ///   of this, if you're sharing it.
     ///
@@ -92,11 +96,11 @@ async fn ra_beacon_loop(outgoing: mpsc::Sender<Vec<u8>>, cfg: RaConfig) {
 }
 
 /// Consumes every inbound packet and replies to the two kinds of traffic
-/// this crate cares about: Router Solicitations and in-suffix DNS
-/// queries. Everything else is dropped - if you need other packets to go
-/// somewhere too (e.g. other data traffic sharing the link), fan `incoming` out
-/// upstream of this crate rather than trying to reuse the same receiver
-/// for both purposes.
+/// this crate cares about: Router Solicitations and DNS queries sent to
+/// our resolver address. Everything else is dropped - if you need other
+/// packets to go somewhere too (e.g. other data traffic sharing the
+/// link), fan `incoming` out upstream of this crate rather than trying to
+/// reuse the same receiver for both purposes.
 async fn dispatch_loop(
     mut incoming: mpsc::Receiver<Vec<u8>>,
     outgoing: mpsc::Sender<Vec<u8>>,
@@ -123,4 +127,3 @@ async fn dispatch_loop(
     }
     log::info!("incoming channel closed, dns-announce dispatcher stopped");
 }
-

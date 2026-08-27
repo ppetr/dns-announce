@@ -1,12 +1,12 @@
 use async_trait::async_trait;
+use dns_announce::dns::{matches_suffix, Answer, DnsConfig, Query, Reply, Resolver};
+use dns_announce::ra::RaConfig;
+use dns_announce::DnsAnnounce;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use dns_announce::dns::{DnsConfig, Resolver};
-use dns_announce::ra::RaConfig;
-use dns_announce::DnsAnnounce;
 
 /// Toy resolver: a static map, "app" would instead be your control-plane
 /// lookup (peer registry, service discovery, whatever backs "foo.myvpn").
@@ -16,8 +16,16 @@ struct StaticResolver {
 
 #[async_trait]
 impl Resolver for StaticResolver {
-    async fn resolve(&self, name: &str) -> Option<IpAddr> {
-        self.map.get(name).copied()
+    async fn resolve(&self, query: &Query) -> Reply {
+        // Classic split-DNS gate: only names under "myvpn" are ours,
+        // everything else is REFUSED so the OS asks its real resolver.
+        if !matches_suffix(&query.name, "myvpn") {
+            return Reply::NotMine;
+        }
+        match self.map.get(&query.name) {
+            Some(&addr) => Reply::Answer(Answer::Addrs(vec![addr])),
+            None => Reply::NxDomain,
+        }
     }
 }
 
@@ -33,10 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let dns_server_addr: Ipv6Addr = "fd00:aaaa::1".parse()?;
 
     let mut map = HashMap::new();
-    map.insert(
-        "foo.myvpn".to_string(),
-        IpAddr::V6("fd00:aaaa::2".parse()?),
-    );
+    map.insert("foo.myvpn".to_string(), IpAddr::V6("fd00:aaaa::2".parse()?));
     let resolver: Arc<dyn Resolver> = Arc::new(StaticResolver { map });
 
     let ra_cfg = RaConfig {
@@ -49,7 +54,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let dns_cfg = DnsConfig {
         server_addr: dns_server_addr,
-        suffix: "myvpn".to_string(),
     };
 
     // --- dns-announce side: just channels, no knowledge of tun-rs at all ---
