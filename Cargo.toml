@@ -2,6 +2,14 @@
 name = "dns-announce"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.65"
+description = "Announce a DNS resolver to link-local IPv6 clients via Router Advertisement / RDNSS (RFC 8106), with a built-in minimal DNS server backed by an application-supplied resolver. Transport-agnostic: raw packets in and out over channels."
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["dns", "ipv6", "rdnss", "split-dns", "rfc8106"]
+categories = ["network-programming", "asynchronous"]
+repository = "https://github.com/ppetr/dns-announce"
+homepage = "https://github.com/ppetr/dns-announce"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
