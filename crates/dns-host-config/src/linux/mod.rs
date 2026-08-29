@@ -3,8 +3,10 @@
 //! time, see `docs/design-dns-host-config.md` for the planned chain:
 //! systemd-resolved, NetworkManager, resolvconf, static `/etc/resolv.conf`).
 
+pub mod resolvconf;
 pub mod static_resolv_conf;
 pub mod systemd_resolved;
 
+pub use resolvconf::Resolvconf;
 pub use static_resolv_conf::StaticResolvConf;
 pub use systemd_resolved::SystemdResolved;
