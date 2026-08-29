@@ -1,4 +1,4 @@
-//! Linux-only integration test that drives `DnsAnnounce` through a real
+//! Linux-only integration test that drives `DnsStack` through a real
 //! kernel IPv6 stack instead of hand-fed byte buffers.
 //!
 //! A dedicated TUN device acts as a private point-to-point "loopback": the
@@ -30,7 +30,7 @@ mod common;
 use std::net::Ipv4Addr;
 
 use common::Harness;
-use dns_announce::dns::{Answer, RecordKind, Reply};
+use dns_stack::dns::{Answer, RecordKind, Reply};
 use simple_dns::{rdata::RData, Packet, RCODE, TYPE};
 
 #[tokio::test(flavor = "multi_thread")]

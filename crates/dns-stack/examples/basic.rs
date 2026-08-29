@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use dns_announce::dns::{matches_suffix, Answer, DnsConfig, Query, Reply, Resolver};
-use dns_announce::ra::RaConfig;
-use dns_announce::DnsAnnounce;
+use dns_stack::dns::{matches_suffix, Answer, DnsConfig, Query, Reply, Resolver};
+use dns_stack::ra::RaConfig;
+use dns_stack::DnsStack;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
@@ -56,11 +56,11 @@ async fn main() -> anyhow::Result<()> {
         server_addr: dns_server_addr,
     };
 
-    // --- dns-announce side: just channels, no knowledge of the transport ---
+    // --- dns-stack side: just channels, no knowledge of the transport ---
     let (incoming_tx, incoming_rx) = mpsc::channel::<Vec<u8>>(256);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<Vec<u8>>(256);
 
-    DnsAnnounce::new(ra_cfg, dns_cfg).spawn(incoming_rx, outgoing_tx, resolver);
+    DnsStack::new(ra_cfg, dns_cfg).spawn(incoming_rx, outgoing_tx, resolver);
 
     // --- bridge side: the only part tied to a concrete packet source.
     // Here that's a virtual interface via `tun-rs`; swap in io_uring, a
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Reader: device -> incoming_tx. Whatever else consumes this link's
     // non-DNS/non-RS traffic, you'll want to fan this out upstream of
-    // dns-announce rather than only feeding it here (see lib.rs docs).
+    // dns-stack rather than only feeding it here (see lib.rs docs).
     let reader_device = device.clone();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
             match reader_device.recv(&mut buf).await {
                 Ok(n) => {
                     if incoming_tx.send(buf[..n].to_vec()).await.is_err() {
-                        break; // dns-announce dispatcher gone
+                        break; // dns-stack dispatcher gone
                     }
                 }
                 Err(e) => {

@@ -28,7 +28,7 @@ bin=$(cargo test --no-run --message-format=json-render-diagnostics --test loopba
   exit 1
 }
 
-docker build -t dns-announce-loopback docker/
+docker build -t dns-stack-loopback docker/
 exec docker run --rm --cap-add=NET_ADMIN --device=/dev/net/tun \
   -v "$bin":/loopback_linux:ro \
-  dns-announce-loopback "$@"
+  dns-stack-loopback "$@"

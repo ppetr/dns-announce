@@ -19,12 +19,12 @@ bin=$(cargo test --no-run --message-format=json-render-diagnostics --test discov
       | jq -r 'select(.executable != null and .target.name == "discovery_linux") | .executable')
 [ -n "$bin" ] && [ -x "$bin" ] || { echo "test binary not found" >&2; exit 1; }
 
-docker build -f docker/Dockerfile.discovery -t dns-announce-discovery docker/
+docker build -f docker/Dockerfile.discovery -t dns-stack-discovery docker/
 
 cid=$(docker run -d --rm --privileged --cgroupns=host --device=/dev/net/tun \
         --tmpfs /run --tmpfs /tmp \
         -v "$bin":/discovery_linux:ro \
-        dns-announce-discovery)
+        dns-stack-discovery)
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
 # Wait for systemd to finish booting.

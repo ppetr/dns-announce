@@ -46,12 +46,12 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-pub struct DnsAnnounce {
+pub struct DnsStack {
     ra_cfg: RaConfig,
     dns_cfg: DnsConfig,
 }
 
-impl DnsAnnounce {
+impl DnsStack {
     pub fn new(ra_cfg: RaConfig, dns_cfg: DnsConfig) -> Self {
         Self { ra_cfg, dns_cfg }
     }
@@ -139,5 +139,5 @@ async fn dispatch_loop<In>(
             }
         }
     }
-    log::info!("incoming channel closed, dns-announce dispatcher stopped");
+    log::info!("incoming channel closed, dns-stack dispatcher stopped");
 }

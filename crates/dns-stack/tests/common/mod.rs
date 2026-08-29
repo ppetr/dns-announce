@@ -1,5 +1,5 @@
 //! Shared harness for the Linux integration tests: a TUN device wired to a
-//! running `DnsAnnounce`, plus a UDP client. Included via `mod common;` by
+//! running `DnsStack`, plus a UDP client. Included via `mod common;` by
 //! `loopback_linux.rs` (socket path) and `discovery_linux.rs` (RA/RDNSS
 //! discovery path). Not a test target itself.
 
@@ -16,9 +16,9 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use dns_announce::dns::{DnsConfig, Query, Reply, Resolver};
-use dns_announce::ra::RaConfig;
-use dns_announce::DnsAnnounce;
+use dns_stack::dns::{DnsConfig, Query, Reply, Resolver};
+use dns_stack::ra::RaConfig;
+use dns_stack::DnsStack;
 use simple_dns::{Name, Packet, Question, CLASS, QCLASS, QTYPE, TYPE};
 
 /// DNS suffix the test resolvers claim.
@@ -38,10 +38,10 @@ where
     }
 }
 
-// --- harness: TUN device + bridge tasks + running DnsAnnounce -----------
+// --- harness: TUN device + bridge tasks + running DnsStack -----------
 
 pub struct Harness {
-    /// Address `DnsAnnounce` answers DNS on for this harness. Reachable
+    /// Address `DnsStack` answers DNS on for this harness. Reachable
     /// on-link via the connected `/64` route that assigning the interface
     /// address installs; deliberately not assigned to the interface (that
     /// would route traffic to it via `lo`).
@@ -171,7 +171,7 @@ impl Harness {
             server_addr: server,
         };
         let resolver: Arc<dyn Resolver> = Arc::new(FnResolver(resolve));
-        DnsAnnounce::new(ra_cfg, dns_cfg).spawn(in_rx, out_tx, resolver);
+        DnsStack::new(ra_cfg, dns_cfg).spawn(in_rx, out_tx, resolver);
 
         Harness {
             server,

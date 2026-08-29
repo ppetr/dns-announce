@@ -1,6 +1,6 @@
 # Linux setup
 
-`dns-announce` puts a resolver address and a search domain onto a link via
+`dns-stack` puts a resolver address and a search domain onto a link via
 RA/RDNSS (RFC 8106). Whether a Linux host on that link *acts* on it is entirely
 up to that host's own network stack -- this crate only puts the bytes on the
 wire. This document covers what the receiving Linux host needs, the non-obvious
@@ -36,7 +36,7 @@ or the D-Bus API `org.freedesktop.resolve1` (`SetLinkDNS`, `SetLinkDomains`,
 Best when **you own the host** (a VPN client configuring its own tunnel). It is
 deterministic, immediate, scoped without any client-side opt-in, and
 `systemd-resolved` drops the configuration automatically when the link goes
-away. `dns-announce` targets (A); (B) is noted here because it is frequently the
+away. `dns-stack` targets (A); (B) is noted here because it is frequently the
 better fit, and the same `Resolver` implementation can sit behind it.
 
 ## Path A: making RA/RDNSS work
@@ -180,7 +180,7 @@ that broke:
 | `resolved_does_not_route_foreign_names_to_us` | the routing domain is *scoped* -- non-suffix lookups never reach the crate's resolver |
 
 All four are `#[ignore]`d in a normal `cargo test`; the scripts pass
-`--ignored`. Shared harness (TUN device wired to a running `DnsAnnounce`) is
+`--ignored`. Shared harness (TUN device wired to a running `DnsStack`) is
 `tests/common/mod.rs`.
 
 ## Troubleshooting checklist

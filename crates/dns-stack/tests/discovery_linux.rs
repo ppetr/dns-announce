@@ -10,7 +10,7 @@
 //!      advertised resolver + routing domain to resolved.
 //!   3. `getaddrinfo_resolves_in_suffix_name_via_rdnss` - the whole chain:
 //!      `getaddrinfo("foo.myvpn.example")` -> nss-resolve -> resolved -> split-DNS
-//!      -> our `DnsAnnounce` -> the expected address.
+//!      -> our `DnsStack` -> the expected address.
 //!   4. `resolved_does_not_route_foreign_names_to_us` - the DNSSL domain is
 //!      a *routing* domain: non-suffix lookups do not reach our resolver.
 //!
@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::Harness;
-use dns_announce::dns::{Answer, RecordKind, Reply};
+use dns_stack::dns::{Answer, RecordKind, Reply};
 
 const BEACON: Duration = Duration::from_secs(2);
 

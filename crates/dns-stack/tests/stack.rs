@@ -1,4 +1,4 @@
-//! Full-stack tests: drive `DnsAnnounce` through nothing but its inbound
+//! Full-stack tests: drive `DnsStack` through nothing but its inbound
 //! and outbound channels, with the tokio clock paused so the RA beacon is
 //! deterministic. No real transport, no sockets - just `Vec<u8>` in,
 //! `Vec<u8>` out, crafted/parsed with the crate's own `packet` helpers.
@@ -10,13 +10,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use dns_announce::dns::{Answer, DnsConfig, Query, RecordKind, Reply, Resolver};
-use dns_announce::packet::{
+use dns_stack::dns::{Answer, DnsConfig, Query, RecordKind, Reply, Resolver};
+use dns_stack::packet::{
     build_ipv6_header, build_udp_packet, parse_ipv6_udp, upper_layer_checksum, ICMPV6_NEXT_HEADER,
     IPV6_HEADER_LEN,
 };
-use dns_announce::ra::RaConfig;
-use dns_announce::DnsAnnounce;
+use dns_stack::ra::RaConfig;
+use dns_stack::DnsStack;
 use simple_dns::{rdata::RData, Name, Packet, Question, CLASS, QCLASS, QTYPE, RCODE, TYPE};
 
 const SERVER: Ipv6Addr = Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1);
@@ -60,7 +60,7 @@ where
         server_addr: SERVER,
     };
     let resolver: Arc<dyn Resolver> = Arc::new(FnResolver(resolve));
-    DnsAnnounce::new(ra_cfg, dns_cfg).spawn(in_rx, out_tx, resolver);
+    DnsStack::new(ra_cfg, dns_cfg).spawn(in_rx, out_tx, resolver);
     (in_tx, out_rx)
 }
 

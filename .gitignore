@@ -12,4 +12,4 @@ Cargo.lock
 .claude/
 
 # scratch: docker/run-discovery.sh output
-/docker/run.log
+/crates/dns-stack/docker/run.log
