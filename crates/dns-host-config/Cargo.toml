@@ -1,0 +1,23 @@
+[package]
+name = "dns-host-config"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.65"
+description = "Push a DNS resolver + routing domain into a host's DNS configuration (systemd-resolved, and more to come) and withdraw it again. Independent of any particular DNS server implementation."
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["dns", "systemd-resolved", "conditional-dns", "vpn", "resolver"]
+categories = ["network-programming", "os"]
+repository = "https://github.com/ppetr/dns-announce"
+homepage = "https://github.com/ppetr/dns-announce"
+
+[dependencies]
+async-trait = "0.1"
+log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"
