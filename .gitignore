@@ -10,3 +10,6 @@ Cargo.lock
 *.pdb
 
 .claude/
+
+# scratch: docker/run-discovery.sh output
+/docker/run.log

@@ -148,7 +148,7 @@ Both spawned tasks stop cleanly once `outgoing` has no live receivers or
 |------------------------|---------|
 | `link_local_src`       | Link-local source address of your interface (`fe80::/10`). RAs are sent from here. |
 | `dns_servers`          | Resolver address(es) to advertise via RDNSS — usually just your own address on this link. |
-| `search_domains`       | Search domain(s) to advertise via DNSSL, e.g. `"myvpn"`. Empty ⇒ no DNSSL option. |
+| `search_domains`       | Search domain(s) to advertise via DNSSL, e.g. `"myvpn.example"`. Empty ⇒ no DNSSL option. Use **≥ 2 labels**: `systemd-resolved` drops a single bare label as a routing domain ([Linux setup](docs/setup.linux.md)). |
 | `lifetime_secs`        | How long resolvers should trust the RDNSS/DNSSL entries. RFC 8106 recommends ≥ 2× the resend interval. |
 | `router_lifetime_secs` | Router Lifetime in the RA header. Keep `0` unless you actually want to become the default IPv6 route. |
 | `resend_interval`      | How often to re-send unsolicited RAs to `ff02::1`. |
@@ -175,6 +175,12 @@ Both spawned tasks stop cleanly once `outgoing` has no live receivers or
 
 ## Client-side setup
 
+> **Linux:** [`docs/setup.linux.md`](docs/setup.linux.md) is the full guide —
+> `systemd-networkd`/`-resolved` configuration, the direct `resolvectl`
+> alternative, the non-obvious failure modes (RA source vs. interface address,
+> networkd flushing "foreign" addresses, single-label DNSSL domains), and the
+> containerised integration tests.
+
 This crate emits raw packets through your transport, so **the sending host needs
 no sysctl changes** — it bypasses the kernel's RA machinery entirely (no
 `net.ipv6.conf.*.forwarding` required for the announcement itself).
@@ -189,8 +195,11 @@ The **receiving** host is where it matters, and that is a client-side concern
 * **`net.ipv6.conf.<iface>.disable_ipv6=0`** (and `all.disable_ipv6=0`).
 * **The kernel does not parse RDNSS/DNSSL itself** — a userspace consumer must be
   running or the options are silently dropped even with `accept_ra` on:
-  `systemd-networkd` (`IPv6AcceptRA=yes`, `UseDNS=yes`, `UseDomains=yes`) feeding
-  `systemd-resolved`, or NetworkManager, or `dhcpcd`, or the legacy `rdnssd`.
+  `systemd-networkd` (`IPv6AcceptRA=yes`, `UseDNS=yes`, and `UseDomains=route`
+  for *scoped* split DNS — the default `no` gives you the resolver globally)
+  feeding `systemd-resolved`, or NetworkManager, or `dhcpcd`, or the legacy
+  `rdnssd`. On a link networkd manages this way it also takes over the link's
+  global addresses — see [`docs/setup.linux.md`](docs/setup.linux.md).
 * `router_lifetime_secs: 0` (the default here) is fine — DNS consumers still
   parse RDNSS; it only means no default route is installed.
 * IPv6 has no `rp_filter` sysctl, but an nftables `fib` / `rpfilter` rule or a

@@ -1,0 +1,28 @@
+# systemd-in-a-container for the discovery spike / test: a stock IPv6 stack
+# (systemd-networkd + systemd-resolved) that should pick up the RDNSS option
+# from the crate's RA beacon and route `*.myvpn` DNS to the advertised
+# resolver address.
+#
+# Not minimal by design - unlike docker/Dockerfile, this one needs a real
+# init and the RA-consuming daemons. Driven by docker/run-discovery.sh.
+FROM debian:stable
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        systemd systemd-sysv systemd-resolved libnss-resolve udev \
+        dbus iproute2 ndisc6 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Resolve through systemd-resolved. nss-resolve talks to it directly, so we
+# do NOT touch /etc/resolv.conf (a bind mount at build time - can't be
+# replaced). `resolve` before `dns` means split-DNS routing domains apply.
+RUN sed -i 's/^hosts:.*/hosts: files resolve [!UNAVAIL=return] dns/' /etc/nsswitch.conf \
+    && systemctl enable systemd-networkd systemd-resolved
+
+# Manage any TUN the test creates (Harness names them dnat<n>) and consume
+# its RAs: UseDomains=route makes the DNSSL domain a routing domain, i.e.
+# split-DNS rather than a global resolver.
+RUN mkdir -p /etc/systemd/network
+COPY discovery.network /etc/systemd/network/10-dnat.network
+
+STOPSIGNAL SIGRTMIN+3
+ENTRYPOINT ["/lib/systemd/systemd"]

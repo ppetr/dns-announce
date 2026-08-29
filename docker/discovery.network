@@ -1,0 +1,16 @@
+[Match]
+Name=dnat1
+
+[Network]
+# networkd takes over global IPv6 address management on a link with
+# IPv6AcceptRA, so it must own the interface address itself - otherwise it
+# flushes the one the harness assigned and the resolver becomes unreachable.
+# The networkd-dependent discovery tests pin slot 1, hence this fixed name
+# and address. (`probe*` / other `dnat*` interfaces are left unmanaged.)
+Address=fd00:5d5:1::2/64
+LinkLocalAddressing=ipv6
+IPv6AcceptRA=yes
+
+[IPv6AcceptRA]
+UseDNS=yes
+UseDomains=route
