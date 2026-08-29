@@ -11,7 +11,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv systemd-resolved dbus iproute2 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN systemctl enable systemd-resolved
+# See docker-resolv-conf-fixup.service: Docker's own /etc/resolv.conf bind
+# mount blocks the postinst above from replacing it with resolved's
+# symlink, so a unit undoes that at every boot instead - idempotent and a
+# no-op outside Docker, so nothing downstream (this image or a real host)
+# needs to special-case which one it's running in.
+COPY docker-resolv-conf-fixup.service /etc/systemd/system/docker-resolv-conf-fixup.service
+RUN systemctl enable systemd-resolved docker-resolv-conf-fixup.service
 
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/lib/systemd/systemd"]

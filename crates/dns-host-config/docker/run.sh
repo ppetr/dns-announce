@@ -39,14 +39,6 @@ while [ "$i" -lt 30 ]; do
 done
 echo "container system state: ${state:-unknown}"
 
-# Docker bind-mounts its own /etc/resolv.conf into the container (visible
-# as a real bind mount, not something the resolved postinst script can
-# replace at package-install time), so it never becomes the symlink
-# SystemdResolved::probe() requires. Swap it for the real thing now that
-# resolved has started and created its runtime files.
-docker exec "$cid" umount /etc/resolv.conf
-docker exec "$cid" ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-
 # The test targets a fixed interface name; the harness creates it since the
 # test binary itself has no CAP_NET_ADMIN-using code of its own.
 docker exec "$cid" ip link add dummy0 type dummy

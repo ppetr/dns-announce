@@ -1,0 +1,19 @@
+[Unit]
+Description=Undo Docker's /etc/resolv.conf bind mount before systemd-resolved starts
+After=local-fs.target
+Before=systemd-resolved.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Docker bind-mounts its own /etc/resolv.conf into every container it runs,
+# regardless of --network mode, which blocks systemd-resolved's postinst
+# from replacing it with its own symlink at image-build time ("Device or
+# resource busy"). Undo that here instead, before resolved starts - a
+# no-op outside Docker, since `mountpoint` is false if resolv.conf isn't a
+# separate mountpoint to begin with, and the unit's result is the final
+# `ln`, not the opportunistic `umount`.
+ExecStart=/bin/sh -c 'mountpoint -q /etc/resolv.conf 2>/dev/null && umount /etc/resolv.conf; ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf'
+
+[Install]
+WantedBy=sysinit.target
