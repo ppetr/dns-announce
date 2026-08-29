@@ -58,9 +58,9 @@ impl DnsRouteConfig {
 fn is_valid_domain(domain: &str) -> bool {
     let trimmed = domain.trim_end_matches('.');
     !trimmed.is_empty()
-        && trimmed
-            .split('.')
-            .all(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        && trimmed.split('.').all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
 }
 
 fn normalize_domains(domains: Vec<String>) -> Vec<String> {
@@ -155,6 +155,9 @@ mod tests {
             vec!["corp.internal".into(), "notcorp.internal".into()],
         )
         .unwrap();
-        assert_eq!(cfg.routing_domains, vec!["corp.internal", "notcorp.internal"]);
+        assert_eq!(
+            cfg.routing_domains,
+            vec!["corp.internal", "notcorp.internal"]
+        );
     }
 }
