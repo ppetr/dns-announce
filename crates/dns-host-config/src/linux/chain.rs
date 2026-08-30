@@ -103,7 +103,7 @@ impl LinuxDnsRoute {
             Ok(b) => Backend::SystemdResolved(b),
             Err(e) => {
                 log::debug!("dns-host-config: systemd-resolved not usable: {e}");
-                match Resolvconf::probe() {
+                match Resolvconf::probe(owner.clone()) {
                     Ok(b) => Backend::Resolvconf(b),
                     Err(e) => {
                         log::debug!("dns-host-config: resolvconf not usable: {e}");
@@ -129,7 +129,7 @@ impl LinuxDnsRoute {
                 .await
                 .ok()
                 .map(Backend::SystemdResolved),
-            "resolvconf" => Resolvconf::probe().ok().map(Backend::Resolvconf),
+            "resolvconf" => Resolvconf::probe(owner).ok().map(Backend::Resolvconf),
             "static-resolv-conf" => Some(Backend::StaticResolvConf(StaticResolvConf::new(owner))),
             _ => None,
         }

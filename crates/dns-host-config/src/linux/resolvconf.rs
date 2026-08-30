@@ -1,14 +1,19 @@
-//! Global-override forwarding via the `resolvconf(8)` helper (`openresolv`
-//! or the original Debian `resolvconf` package): `resolvconf -a
-//! <interface>` with `nameserver` lines on stdin to add a record,
-//! `resolvconf -d <interface> -f` to remove it.
+//! Conditional forwarding via the `resolvconf(8)` helper (`openresolv` or
+//! the original Debian `resolvconf` package): `resolvconf -a <name>` with
+//! `nameserver` lines on stdin to add a record, `resolvconf -d <name> -f`
+//! to remove it.
 //!
-//! Like [`StaticResolvConf`](crate::linux::StaticResolvConf), this cannot
-//! do conditional forwarding - `resolvconf(8)` merges every registered
-//! interface's nameservers into one flat, global `/etc/resolv.conf`, with
-//! no concept of routing one domain elsewhere while leaving the rest
-//! alone. `set()` refuses a non-empty `routing_domains` for the same
-//! reason the static-file backend does.
+//! `resolvconf(8)`'s whole job is merging every registered interface's
+//! nameservers into one flat, global `/etc/resolv.conf` - which is exactly
+//! what conditional forwarding via REFUSED-fallback needs (see
+//! `docs/design-dns-host-config.md`, "Conditional forwarding without
+//! native OS support"): our entry alongside whatever else is already
+//! registered, in a specific order. The "alongside" part is free - the
+//! host's original resolvers stay registered under their own names and
+//! keep appearing in the merged file without this backend doing anything
+//! about it. The **order** isn't free: `set()` registers under a synthetic
+//! name, not the real `interface` it's given, specifically so it sorts
+//! first - see `registration_name`.
 //!
 //! ## Detection
 //!
@@ -67,18 +72,22 @@ impl From<io::Error> for Error {
 
 pub struct Resolvconf {
     binary: PathBuf,
-    active_interface: Option<String>,
+    registration_name: String,
+    active: bool,
 }
 
 impl Resolvconf {
     /// Locates `resolvconf` on `PATH` and verifies it isn't a
     /// `resolvectl` compatibility shim. Fails otherwise - see the module
-    /// docs.
-    pub fn probe() -> Result<Self, Error> {
-        Self::probe_named("resolvconf")
+    /// docs. `owner` is folded into the name `set()`/`reset()` register
+    /// under (see `registration_name`) so concurrent instances (e.g. two
+    /// VPN tunnels on the same host) don't collide on the same entry -
+    /// pick something stable and specific to your application.
+    pub fn probe(owner: impl Into<String>) -> Result<Self, Error> {
+        Self::probe_named("resolvconf", owner.into())
     }
 
-    fn probe_named(name: &str) -> Result<Self, Error> {
+    fn probe_named(name: &str, owner: String) -> Result<Self, Error> {
         let binary = find_in_path(name)
             .ok_or_else(|| Error::NotAvailable(format!("{name} not found on PATH")))?;
         if points_at_resolvectl(&binary) {
@@ -90,7 +99,8 @@ impl Resolvconf {
         }
         Ok(Self {
             binary,
-            active_interface: None,
+            registration_name: registration_name(&owner),
+            active: false,
         })
     }
 }
@@ -99,28 +109,22 @@ impl Resolvconf {
 impl DnsRoute for Resolvconf {
     type Error = Error;
 
-    async fn set(&mut self, interface: &str, config: &DnsRouteConfig) -> Result<(), Error> {
-        if !config.routing_domains.is_empty() {
-            return Err(Error::NotAvailable(
-                "resolvconf(8) cannot do conditional forwarding; routing_domains must be empty"
-                    .into(),
-            ));
-        }
-
+    async fn set(&mut self, _interface: &str, config: &DnsRouteConfig) -> Result<(), Error> {
         let mut input = String::new();
         for server in &config.servers {
             input.push_str(&format!("nameserver {server}\n"));
         }
-        self.run(&["-a", interface], &input).await?;
-        self.active_interface = Some(interface.to_string());
+        self.run(&["-a", &self.registration_name], &input).await?;
+        self.active = true;
         Ok(())
     }
 
     async fn reset(&mut self) -> Result<(), Error> {
-        let Some(interface) = self.active_interface.take() else {
+        if !self.active {
             return Ok(());
-        };
-        self.run(&["-d", &interface, "-f"], "").await
+        }
+        self.active = false;
+        self.run(&["-d", &self.registration_name, "-f"], "").await
     }
 }
 
@@ -168,10 +172,32 @@ fn points_at_resolvectl(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+const REGISTRATION_PREFIX: &str = "vpn-";
+
+/// The name `set()`/`reset()` register under with `resolvconf(8)` -
+/// deliberately *not* the real interface name they're given.
+/// `resolvconf(8)`'s default `/etc/resolvconf/interface-order` sorts a
+/// `vpn*`-named entry near the very top (right after loopback, ahead of
+/// `eth*`/`wlan*`/everything else, regardless of registration order -
+/// verified empirically, see `docs/design-dns-host-config.md`), which the
+/// real interface name can't guarantee: a WireGuard interface is commonly
+/// named e.g. `wg0`, matching no high-priority pattern at all and sorting
+/// wherever the catch-all `*` bucket happens to place it. `owner` is
+/// folded in (sanitized to `[A-Za-z0-9_-]`, truncated) so two concurrent
+/// instances don't register the same name and clobber each other.
+fn registration_name(owner: &str) -> String {
+    let sanitized: String = owner
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(32)
+        .collect();
+    format!("{REGISTRATION_PREFIX}{sanitized}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::IpAddr;
     use tokio::sync::Mutex;
 
     fn config(server: &str) -> DnsRouteConfig {
@@ -245,48 +271,72 @@ mod tests {
         bin
     }
 
+    fn backend(binary: PathBuf, owner: &str) -> Resolvconf {
+        Resolvconf {
+            binary,
+            registration_name: registration_name(owner),
+            active: false,
+        }
+    }
+
+    #[test]
+    fn registration_name_is_prefixed_and_sanitized() {
+        assert_eq!(registration_name("my-vpn"), "vpn-my-vpn");
+        assert_eq!(
+            registration_name("weird chars!@# ok_1"),
+            "vpn-weirdcharsok_1"
+        );
+    }
+
+    #[test]
+    fn registration_name_is_truncated() {
+        let long = "a".repeat(100);
+        assert_eq!(
+            registration_name(&long).len(),
+            REGISTRATION_PREFIX.len() + 32
+        );
+    }
+
     #[tokio::test]
-    async fn set_invokes_resolvconf_dash_a_with_nameservers_on_stdin() {
+    async fn set_registers_under_the_synthetic_name_not_the_real_interface() {
         let _guard = PROCESS_SPAWN_LOCK.lock().await;
         let bin_dir = tempfile::tempdir().unwrap();
         let record_dir = tempfile::tempdir().unwrap();
         let binary = fake_resolvconf(bin_dir.path(), record_dir.path(), 0);
 
-        let mut b = Resolvconf {
-            binary,
-            active_interface: None,
-        };
+        // set() is told "tun0", but must register as "vpn-<owner>" - see
+        // the module docs on why the real interface name isn't used for
+        // this.
+        let mut b = backend(binary, "test-owner");
         b.set("tun0", &config("10.1.2.3")).await.unwrap();
 
         assert_eq!(
             std::fs::read_to_string(record_dir.path().join("args")).unwrap(),
-            "-a tun0\n"
+            "-a vpn-test-owner\n"
         );
         assert_eq!(
             std::fs::read_to_string(record_dir.path().join("stdin")).unwrap(),
             "nameserver 10.1.2.3\n"
         );
-        assert_eq!(b.active_interface.as_deref(), Some("tun0"));
+        assert!(b.active);
     }
 
     #[tokio::test]
-    async fn reset_invokes_resolvconf_dash_d_dash_f() {
+    async fn reset_invokes_resolvconf_dash_d_dash_f_on_the_synthetic_name() {
         let _guard = PROCESS_SPAWN_LOCK.lock().await;
         let bin_dir = tempfile::tempdir().unwrap();
         let record_dir = tempfile::tempdir().unwrap();
         let binary = fake_resolvconf(bin_dir.path(), record_dir.path(), 0);
 
-        let mut b = Resolvconf {
-            binary,
-            active_interface: Some("tun0".to_string()),
-        };
+        let mut b = backend(binary, "test-owner");
+        b.active = true;
         b.reset().await.unwrap();
 
         assert_eq!(
             std::fs::read_to_string(record_dir.path().join("args")).unwrap(),
-            "-d tun0 -f\n"
+            "-d vpn-test-owner -f\n"
         );
-        assert!(b.active_interface.is_none());
+        assert!(!b.active);
     }
 
     #[tokio::test]
@@ -296,10 +346,7 @@ mod tests {
         // A binary that would fail if invoked, to prove reset() doesn't
         // call it when there's nothing to undo.
         let binary = fake_resolvconf(bin_dir.path(), record_dir.path(), 1);
-        let mut b = Resolvconf {
-            binary,
-            active_interface: None,
-        };
+        let mut b = backend(binary, "test-owner");
         b.reset().await.unwrap();
     }
 
@@ -310,32 +357,9 @@ mod tests {
         let record_dir = tempfile::tempdir().unwrap();
         let binary = fake_resolvconf(bin_dir.path(), record_dir.path(), 1);
 
-        let mut b = Resolvconf {
-            binary,
-            active_interface: None,
-        };
+        let mut b = backend(binary, "test-owner");
         let err = b.set("tun0", &config("10.1.2.3")).await.unwrap_err();
 
         assert!(matches!(err, Error::CommandFailed { .. }));
-    }
-
-    #[tokio::test]
-    async fn set_refuses_routing_domains() {
-        let bin_dir = tempfile::tempdir().unwrap();
-        let record_dir = tempfile::tempdir().unwrap();
-        let binary = fake_resolvconf(bin_dir.path(), record_dir.path(), 0);
-        let mut b = Resolvconf {
-            binary,
-            active_interface: None,
-        };
-        let cfg = DnsRouteConfig::new(
-            vec![IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))],
-            vec!["myvpn.example".into()],
-        )
-        .unwrap();
-        assert!(matches!(
-            b.set("tun0", &cfg).await,
-            Err(Error::NotAvailable(_))
-        ));
     }
 }

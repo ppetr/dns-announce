@@ -1,13 +1,21 @@
-//! Global-override fallback: directly read/write `/etc/resolv.conf` when no
+//! Last-resort fallback: directly read/write `/etc/resolv.conf` when no
 //! smarter DNS manager (systemd-resolved, NetworkManager, resolvconf) is
 //! usable.
 //!
-//! This is the last resort in the Linux backend chain, and the only one
-//! that cannot do conditional forwarding - a plain `resolv.conf` has no
-//! concept of "route this domain elsewhere, leave everything else as-is",
-//! only a flat, global nameserver list. [`set`](StaticResolvConf::set)
-//! therefore refuses a non-empty `routing_domains` outright rather than
-//! silently applying a global override for what was asked as a scoped one.
+//! A plain `resolv.conf` has no concept of "route this domain elsewhere,
+//! leave everything else as-is" - only a flat, global nameserver list. For
+//! a non-empty `routing_domains` (the case this project actually needs;
+//! see `docs/design-dns-host-config.md`, "Conditional forwarding without
+//! native OS support"), [`set`](StaticResolvConf::set) gets there anyway,
+//! by writing `config.servers` first and then, immediately after them, the
+//! `nameserver` lines pulled out of whatever was in the file before us.
+//! For anything outside our suffix `config.servers` answers `REFUSED`
+//! (`dns-stack`'s `Reply::NotMine`), and glibc's stub resolver falls
+//! through to the next nameserver on `REFUSED` - verified empirically, see
+//! the design doc. `routing_domains` being empty (full override - a
+//! non-goal for this project, but not rejected by the type) skips
+//! appending the original servers, since the point there is to replace the
+//! resolver entirely.
 //!
 //! ## Crash safety
 //!
@@ -43,20 +51,12 @@ const MARKER_PREFIX: &str = "# managed-by=dns-host-config;owner=";
 
 #[derive(Debug)]
 pub enum Error {
-    /// `routing_domains` was non-empty - see the module docs for why a
-    /// flat `resolv.conf` can't honor that.
-    RoutingDomainsUnsupported,
     Io(io::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::RoutingDomainsUnsupported => write!(
-                f,
-                "a plain /etc/resolv.conf cannot do conditional forwarding; \
-                 routing_domains must be empty for this backend"
-            ),
             Error::Io(e) => write!(f, "static resolv.conf backend: {e}"),
         }
     }
@@ -108,25 +108,30 @@ impl DnsRoute for StaticResolvConf {
     type Error = Error;
 
     async fn set(&mut self, _interface: &str, config: &DnsRouteConfig) -> Result<(), Error> {
-        if !config.routing_domains.is_empty() {
-            return Err(Error::RoutingDomainsUnsupported);
-        }
-
         let reusing_backup =
             current_owner(&self.path) == Some(self.owner.clone()) && self.backup_path.exists();
-        if !reusing_backup {
+        // The *real* original content, for render() to pull fallback
+        // nameservers out of - not whatever we ourselves last wrote, which
+        // is what self.path would hold on a re-set() without this.
+        let original: Vec<u8> = if reusing_backup {
+            fs::read(&self.backup_path)?
+        } else {
             // First takeover: preserve whatever was there before (or the
             // absence of a file at all) so reset() can restore it exactly.
             match fs::read(&self.path) {
-                Ok(existing) => fs::write(&self.backup_path, existing)?,
+                Ok(existing) => {
+                    fs::write(&self.backup_path, &existing)?;
+                    existing
+                }
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
                     fs::write(&self.backup_path, b"")?;
+                    Vec::new()
                 }
                 Err(e) => return Err(e.into()),
             }
-        }
+        };
 
-        fs::write(&self.path, render(&self.owner, config))?;
+        fs::write(&self.path, render(&self.owner, config, &original))?;
         self.active = true;
         Ok(())
     }
@@ -181,18 +186,46 @@ fn current_owner(path: &Path) -> Option<String> {
     first_line.strip_prefix(MARKER_PREFIX).map(str::to_owned)
 }
 
-fn render(owner: &str, config: &DnsRouteConfig) -> String {
+fn render(owner: &str, config: &DnsRouteConfig, original: &[u8]) -> String {
     let mut out = marker_line(owner);
     for server in &config.servers {
         out.push_str(&format!("nameserver {server}\n"));
     }
+    if !config.routing_domains.is_empty() {
+        // Conditional forwarding: fall through to the pre-existing
+        // resolvers for anything outside routing_domains via
+        // REFUSED-fallback (see the module docs and
+        // docs/design-dns-host-config.md). Omitted for full override
+        // (routing_domains empty), since the point there is to replace the
+        // resolver entirely, not fall back to the one being replaced.
+        for addr in parse_nameservers(original) {
+            out.push_str(&format!("nameserver {addr}\n"));
+        }
+    }
     out
+}
+
+/// The address of every `nameserver` line in a resolv.conf's contents, in
+/// order, duplicates included - resolv.conf(5) tolerates repeats and it's
+/// not this function's job to second-guess what was already there.
+fn parse_nameservers(content: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(content)
+        .lines()
+        .filter_map(|line| {
+            let addr = line
+                .trim()
+                .strip_prefix("nameserver")?
+                .split_whitespace()
+                .next()?;
+            Some(addr.to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::IpAddr;
 
     fn config(server: &str) -> DnsRouteConfig {
         DnsRouteConfig::new(vec![server.parse::<IpAddr>().unwrap()], vec![]).unwrap()
@@ -202,19 +235,54 @@ mod tests {
         StaticResolvConf::with_path("test-owner", dir.path().join("resolv.conf"))
     }
 
-    #[tokio::test]
-    async fn set_refuses_routing_domains() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut b = backend(&dir);
-        let cfg = DnsRouteConfig::new(
-            vec![IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))],
-            vec!["myvpn.example".into()],
+    fn config_with_routing_domains(server: &str, domains: &[&str]) -> DnsRouteConfig {
+        DnsRouteConfig::new(
+            vec![server.parse::<IpAddr>().unwrap()],
+            domains.iter().map(|d| d.to_string()).collect(),
         )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn set_with_routing_domains_appends_original_nameservers_after_ours() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resolv.conf");
+        fs::write(&path, "nameserver 9.9.9.9\nnameserver 8.8.8.8\n").unwrap();
+
+        let mut b = StaticResolvConf::with_path("test-owner", &path);
+        b.set(
+            "eth0",
+            &config_with_routing_domains("1.2.3.4", &["myvpn.example"]),
+        )
+        .await
         .unwrap();
-        assert!(matches!(
-            b.set("eth0", &cfg).await,
-            Err(Error::RoutingDomainsUnsupported)
-        ));
+
+        let written = fs::read_to_string(&path).unwrap();
+        // Ours first (REFUSED-fallback relies on this exact order - see
+        // docs/design-dns-host-config.md), then the pre-existing ones,
+        // untouched.
+        let servers: Vec<&str> = written
+            .lines()
+            .filter_map(|l| l.strip_prefix("nameserver "))
+            .collect();
+        assert_eq!(servers, ["1.2.3.4", "9.9.9.9", "8.8.8.8"]);
+    }
+
+    #[tokio::test]
+    async fn set_with_empty_routing_domains_does_not_append_original_nameservers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resolv.conf");
+        fs::write(&path, "nameserver 9.9.9.9\n").unwrap();
+
+        let mut b = StaticResolvConf::with_path("test-owner", &path);
+        // Empty routing_domains = full override (a non-goal for this
+        // project, but the type still allows it) - the pre-existing
+        // resolver must NOT reappear, since the whole point is to replace
+        // it, not fall back to it.
+        b.set("eth0", &config("1.2.3.4")).await.unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("9.9.9.9"));
     }
 
     #[tokio::test]
@@ -321,6 +389,37 @@ mod tests {
             .unwrap()
             .starts_with(MARKER_PREFIX));
         assert!(backup_path_for(&path).exists());
+    }
+
+    #[tokio::test]
+    async fn re_setting_with_routing_domains_keeps_pulling_the_real_original_from_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resolv.conf");
+        fs::write(&path, "nameserver 9.9.9.9\n").unwrap();
+
+        let mut b = StaticResolvConf::with_path("test-owner", &path);
+        b.set(
+            "eth0",
+            &config_with_routing_domains("1.2.3.4", &["myvpn.example"]),
+        )
+        .await
+        .unwrap();
+        // set() again, as if reapplying a changed config - the appended
+        // fallback nameserver must still be the real original (9.9.9.9),
+        // not our own previous output from the line above.
+        b.set(
+            "eth0",
+            &config_with_routing_domains("5.6.7.8", &["myvpn.example"]),
+        )
+        .await
+        .unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        let servers: Vec<&str> = written
+            .lines()
+            .filter_map(|l| l.strip_prefix("nameserver "))
+            .collect();
+        assert_eq!(servers, ["5.6.7.8", "9.9.9.9"]);
     }
 
     #[tokio::test]
