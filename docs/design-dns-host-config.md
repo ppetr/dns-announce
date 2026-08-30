@@ -187,10 +187,16 @@ use case (full-override VPN privacy), but directly relevant to ours.
 ```rust
 pub struct DnsRouteConfig {
     pub servers: Vec<IpAddr>,
-    /// Empty = full override of the default resolver.
+    /// Empty = full override of the default resolver (a non-goal for this
+    /// project - see "Conditional forwarding without native OS support"
+    /// below - but not rejected by the type itself, since a backend built
+    /// around it, e.g. a future full-tunnel consumer, is a legitimate use
+    /// even if this project's own caller never constructs one this way).
     /// Non-empty = routing-only domains: only names under these suffixes
     /// go to `servers`; everything else keeps using the host's existing
-    /// resolver(s). This is the shape `dns-stack`'s use case needs.
+    /// resolver(s). This is the shape `dns-stack`'s use case needs, and
+    /// every backend is expected to support it - see below for how the
+    /// backends without native routing-domain support do it.
     pub routing_domains: Vec<String>,
 }
 
@@ -246,6 +252,85 @@ Same four-way chain as `talpid-dns`, with the same fail-closed verification
 per backend (symlink check for resolved, version+RcManager check for NM,
 binary-identity check for resolvconf). Env var override for tests, e.g.
 `DNS_HOST_CONFIG_BACKEND=systemd|network-manager|resolvconf|static-file`.
+
+### Conditional forwarding without native OS support: the REFUSED-fallback trick
+
+**Full override is a non-goal for this project.** `dns-stack`'s whole point is
+routing exactly one suffix (`*.myvpn`) elsewhere while every other query keeps
+working normally - not tunneling all DNS traffic the way a privacy VPN would.
+So a backend that can only offer "replace the host's entire resolver list"
+(`resolvconf`, a direct `/etc/resolv.conf` edit) is not a lesser-but-acceptable
+substitute for conditional forwarding; on its own it's the wrong feature
+entirely. Early drafts of these two backends therefore just refused a
+non-empty `routing_domains` outright, on the theory that a flat `resolv.conf`
+has no way to express "route this domain elsewhere, leave the rest alone."
+
+That turns out to be wrong, and the fix doesn't need any new machinery -
+`dns-stack`'s existing `Reply::NotMine` → `REFUSED` behavior is already
+enough, *if* the host's resolver actually retries the next configured
+nameserver on `REFUSED`. Verified empirically (not from memory / docs, which
+disagree on this point depending on the source) with two throwaway UDP
+servers in an isolated container and a real `getent ahosts` call - i.e. the
+actual glibc `getaddrinfo()` path, not some resolver-agnostic tool:
+
+| First nameserver's answer | Does glibc try the next nameserver? |
+|---|---|
+| `REFUSED` | **Yes**, immediately |
+| `SERVFAIL` | **Yes**, immediately |
+| `NXDOMAIN` | **No** - treated as final/authoritative |
+
+So: a flat, global-override backend *can* correctly implement conditional
+forwarding, by writing our server as a nameserver **alongside** the host's
+original ones, and relying on `REFUSED` for everything outside our suffix to
+fall through to them. No forwarding logic needs to be built into
+`dns-host-config` or into `dns-stack`'s resolver - the OS already does this,
+we just have to arrange the nameserver list correctly:
+
+* **Ordering is not a free parameter - our server must be listed first.**
+  The obvious-looking alternative ("put us last, so the common case of
+  non-`*.myvpn` queries skips us entirely and only the rare `*.myvpn` query
+  pays an extra hop") is not a latency/reliability trade-off to weigh, it is
+  simply broken: a real upstream resolver asked about `foo.myvpn` has no
+  delegation for the (nonexistent) `.myvpn` TLD to find in the root zone, so
+  it correctly answers `NXDOMAIN` - which, per the table above, glibc does
+  *not* fall through on. Listed last, our server would just never be
+  reached. This isn't worth exposing as a configurable "position" parameter:
+  one of the two positions is essentially never correct for this use case,
+  so a parameter would only add a way to misconfigure it, not real
+  flexibility.
+* **Cost of putting us first:** every query outside `*.myvpn` now pays one
+  extra round trip to our server before falling through - cheap when the
+  server is up (an in-suffix-or-not decision is a local, static lookup with
+  no network I/O of its own per the VPN's design, so the `REFUSED` comes back
+  immediately), but if the server or the link to it is down entirely (not
+  "peer unknown" - actually unreachable), that round trip times out instead
+  of erroring immediately (glibc's default per-nameserver timeout, a few
+  seconds), and *every* DNS lookup on the host stalls by that much until it
+  falls through. A known, worth-documenting degradation, not a correctness
+  problem - and distinct from "queried peer isn't in the VPN," which this
+  crate's callers answer instantly (`Reply::NotMine`) since peers are
+  statically known, not looked up over the network.
+* **Backend-specific implications:**
+  - `StaticResolvConf` already keeps a backup of the file it's replacing; it
+    needs to parse `nameserver` lines back out of that backup and append them
+    after ours, rather than refusing whenever `routing_domains` is non-empty.
+  - `resolvconf(8)` already merges nameservers registered by *every*
+    interface into one file, so the original resolvers likely end up in the
+    output automatically without us tracking them ourselves - but nothing
+    about that merge guarantees *our* entry sorts first. Needs a concrete
+    mechanism (resolvconf's interface-priority/ordering convention) verified
+    against a real `resolvconf` before relying on it, not assumed.
+  - `systemd-resolved`'s own routing-domain mechanism is unaffected by any of
+    this - it does real per-query routing at the resolver level, so ordering
+    and REFUSED-fallback semantics of the *global* resolver list are simply
+    not involved.
+* **Portability caveat:** the `REFUSED`/`SERVFAIL`-fallback,
+  `NXDOMAIN`-is-final split was verified against glibc's stub resolver on
+  Linux specifically. macOS (BSD libresolv via `libinfo`/`mDNSResponder`) and
+  Windows (the OS-level DNS client service) are different C libraries with
+  their own resolution logic and are not assumed to behave the same way -
+  this needs re-verifying, the same way, before leaning on it for either of
+  those platforms' global-override backends.
 
 ### macOS: two backends, pick based on intent
 
