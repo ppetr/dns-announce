@@ -18,7 +18,8 @@ log = "0.4"
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 tokio = { version = "1", default-features = false, features = ["process", "io-util"] }
+libc = "0.2"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net"] }
 tempfile = "3"

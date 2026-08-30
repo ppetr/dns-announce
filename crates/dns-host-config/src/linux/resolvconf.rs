@@ -31,6 +31,31 @@
 //! `no-resolv` mode, which would silently ignore whatever `resolvconf`
 //! writes. Detecting that reliably needs parsing a running dnsmasq's
 //! effective config, which is out of scope for now.
+//!
+//! ## Known issue: the merge doesn't happen when driven from this code (unresolved)
+//!
+//! The whole "alongside" story above - our entry plus whatever else is
+//! already registered - is verified to work when `resolvconf -a <name>` is
+//! invoked from a shell (`docker/run-resolvconf.sh` sets this up manually
+//! and it merges correctly, repeatedly, including with a `tun*`-priority
+//! name). But driven through *this module's* `run()` (i.e. exactly what
+//! `set()` actually does), the generated `/etc/resolv.conf` only ever
+//! shows our own entry - every other previously-registered interface
+//! silently disappears from the output, even though its registration file
+//! under `/run/resolvconf/interface/` is still there untouched.
+//!
+//! Ruled out so far, each individually verified *not* to be the cause:
+//! stdout redirected to `/dev/null`, `SIGPIPE` inherited as `SIG_IGN`
+//! (reset via `pre_exec` below regardless, since it's a correct fix in its
+//! own right even though it didn't explain this), `--tmpfs`/`--cgroupns`
+//! flags, the container image/build history, and working directory.
+//!
+//! To reproduce: `crates/dns-host-config/docker/run-resolvconf.sh` (see
+//! the crate's top-level instructions for exactly what it checks and how
+//! to run just this test). The first assertion (our suffix resolves)
+//! passes; the second (a name outside our suffix falls through to the
+//! pre-registered original resolver) fails - `/etc/resolv.conf` at that
+//! point has only our own `nameserver` line.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -130,12 +155,30 @@ impl DnsRoute for Resolvconf {
 
 impl Resolvconf {
     async fn run(&self, args: &[&str], stdin_data: &str) -> Result<(), Error> {
-        let mut child = Command::new(&self.binary)
+        let mut command = Command::new(&self.binary);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        // Rust's runtime sets SIGPIPE to SIG_IGN for itself, and that
+        // disposition is inherited by spawned children by default -
+        // unlike a normal shell-spawned process. resolvconf(8) is a shell
+        // script that pipes between its own internal commands, and with
+        // SIGPIPE ignored it silently produces a *different*, incomplete
+        // merge (observed: our own entry ends up replacing every other
+        // registered interface instead of being merged alongside them)
+        // instead of erroring - reset it to the default before exec so
+        // resolvconf runs exactly as it would from an interactive shell.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::signal(libc::SIGPIPE, libc::SIG_DFL) == libc::SIG_ERR {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn()?;
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(stdin_data.as_bytes()).await?;
@@ -172,19 +215,20 @@ fn points_at_resolvectl(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-const REGISTRATION_PREFIX: &str = "vpn-";
+const REGISTRATION_PREFIX: &str = "tun-";
 
 /// The name `set()`/`reset()` register under with `resolvconf(8)` -
 /// deliberately *not* the real interface name they're given.
 /// `resolvconf(8)`'s default `/etc/resolvconf/interface-order` sorts a
-/// `vpn*`-named entry near the very top (right after loopback, ahead of
-/// `eth*`/`wlan*`/everything else, regardless of registration order -
-/// verified empirically, see `docs/design-dns-host-config.md`), which the
-/// real interface name can't guarantee: a WireGuard interface is commonly
-/// named e.g. `wg0`, matching no high-priority pattern at all and sorting
-/// wherever the catch-all `*` bucket happens to place it. `owner` is
-/// folded in (sanitized to `[A-Za-z0-9_-]`, truncated) so two concurrent
-/// instances don't register the same name and clobber each other.
+/// `tun*`-named entry right after loopback - ahead of `vpn*`, `tap*`, and
+/// everything else (`eth*`/`wlan*`/the catch-all `*`) - regardless of
+/// registration order, verified empirically (see
+/// `docs/design-dns-host-config.md`). The real interface name can't
+/// guarantee this: a WireGuard interface is commonly named e.g. `wg0`,
+/// matching no high-priority pattern at all and sorting wherever the
+/// catch-all `*` bucket happens to place it. `owner` is folded in
+/// (sanitized to `[A-Za-z0-9_-]`, truncated) so two concurrent instances
+/// don't register the same name and clobber each other.
 fn registration_name(owner: &str) -> String {
     let sanitized: String = owner
         .chars()
@@ -281,10 +325,10 @@ mod tests {
 
     #[test]
     fn registration_name_is_prefixed_and_sanitized() {
-        assert_eq!(registration_name("my-vpn"), "vpn-my-vpn");
+        assert_eq!(registration_name("my-vpn"), "tun-my-vpn");
         assert_eq!(
             registration_name("weird chars!@# ok_1"),
-            "vpn-weirdcharsok_1"
+            "tun-weirdcharsok_1"
         );
     }
 
@@ -304,15 +348,15 @@ mod tests {
         let record_dir = tempfile::tempdir().unwrap();
         let binary = fake_resolvconf(bin_dir.path(), record_dir.path(), 0);
 
-        // set() is told "tun0", but must register as "vpn-<owner>" - see
-        // the module docs on why the real interface name isn't used for
-        // this.
+        // set() is told "tun0" here, but must register as "tun-<owner>"
+        // regardless of what the real interface is actually called - see
+        // the module docs on why.
         let mut b = backend(binary, "test-owner");
         b.set("tun0", &config("10.1.2.3")).await.unwrap();
 
         assert_eq!(
             std::fs::read_to_string(record_dir.path().join("args")).unwrap(),
-            "-a vpn-test-owner\n"
+            "-a tun-test-owner\n"
         );
         assert_eq!(
             std::fs::read_to_string(record_dir.path().join("stdin")).unwrap(),
@@ -334,7 +378,7 @@ mod tests {
 
         assert_eq!(
             std::fs::read_to_string(record_dir.path().join("args")).unwrap(),
-            "-d vpn-test-owner -f\n"
+            "-d tun-test-owner -f\n"
         );
         assert!(!b.active);
     }

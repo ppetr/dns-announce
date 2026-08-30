@@ -332,6 +332,28 @@ we just have to arrange the nameserver list correctly:
   this needs re-verifying, the same way, before leaning on it for either of
   those platforms' global-override backends.
 
+#### Implementation status (Linux)
+
+Both `StaticResolvConf` and `Resolvconf` implement the above (own server
+first, original nameservers after, for a non-empty `routing_domains`) and
+are unit-tested. End-to-end verification against a real host, via
+`crates/dns-host-config/tests/conditional_forwarding_linux.rs` and a
+per-backend Docker container:
+
+* `systemd-resolved`: verified end to end (a different, separate test file,
+  `tests/systemd_resolved_linux.rs` / `tests/chain_linux.rs` - the unified
+  conditional-forwarding test isn't wired up for this backend yet, see
+  below).
+* `resolvconf`: the `tun*`-priority registration trick is verified to work
+  when `resolvconf -a` is invoked from a shell. Driven through this crate's
+  own code (`Resolvconf::run`, i.e. what `set()` actually calls), the merge
+  with other already-registered interfaces does not happen - see
+  `src/linux/resolvconf.rs`, "Known issue: the merge doesn't happen when
+  driven from this code (unresolved)," for the full account of what's been
+  ruled out. Unresolved as of this writing.
+* Static `/etc/resolv.conf` fallback: unit-tested only; no Docker
+  end-to-end run yet (no container variant built for it).
+
 ### macOS: two backends, pick based on intent
 
 * `resolver_files` (native `/etc/resolver/<suffix>`, one file per routing

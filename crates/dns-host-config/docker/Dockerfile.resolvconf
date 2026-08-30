@@ -1,0 +1,18 @@
+# A minimal (no systemd/init) container that gets resolvconf(8) installed
+# at *run* time (see docker/run-resolvconf.sh), not baked into the image.
+#
+# `docker build` RUN steps don't have CAP_SYS_ADMIN, so resolvconf's
+# postinst can't replace Docker's bind-mounted /etc/resolv.conf with its
+# own symlink ("Device or resource busy") - and unlike the
+# systemd-resolved image, retrying that postinst later (`dpkg --configure
+# -a`) does not reliably reach the same end state as a clean one-shot
+# install (observed: a second registered nameserver silently missing from
+# the merged output). So the whole install happens in the running
+# container instead, once --privileged actually grants the capability
+# apt needs.
+FROM debian:stable-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["sleep", "infinity"]
