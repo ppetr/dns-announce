@@ -78,3 +78,41 @@ run_rust_test() {
   shift 2
   docker exec "$cid" "/$name" --ignored --nocapture --test-threads=1 "$@"
 }
+
+# setup_resolvconf_container <cid> [--truncate-off] - install resolvconf(8)
+# at run time (Dockerfile.resolvconf deliberately doesn't bake it in),
+# register the test's pre-existing resolver as record "original0", and
+# create dummy0. With --truncate-off, write
+# TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no to
+# /etc/default/resolvconf so Resolvconf::probe() accepts the backend
+# instead of refusing it (see src/linux/resolvconf.rs, "Loopback
+# truncation").
+setup_resolvconf_container() {
+  local cid=$1 mode=${2:-}
+
+  # Bootstrap resolv.conf at a real resolver so `apt-get update` can
+  # resolve deb.debian.org; --privileged lets us replace Docker's own
+  # bind mount outright.
+  docker exec "$cid" sh -c \
+    'umount /etc/resolv.conf 2>/dev/null; printf "nameserver 8.8.8.8\n" > /etc/resolv.conf'
+  docker exec "$cid" apt-get update -qq
+  docker exec "$cid" apt-get install -y -qq --no-install-recommends resolvconf iproute2
+
+  # resolvconf's postinst captures the bootstrap resolv.conf (8.8.8.8) as
+  # a permanent record "original.resolvconf"; left in place it shadows
+  # the test's own pre-registered resolver (127.7.7.7) on NXDOMAIN, so
+  # drop it now that the install is done.
+  docker exec "$cid" resolvconf -d original.resolvconf -f
+
+  if [[ $mode == --truncate-off ]]; then
+    docker exec "$cid" sh -c \
+      'printf "TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no\n" > /etc/default/resolvconf'
+  fi
+
+  # The test's pre-existing resolver (ORIGINAL_SERVER_ADDR), under a name
+  # resolvconf's default interface-order treats as low-priority relative
+  # to our own tun*-prefixed registration.
+  docker exec "$cid" sh -c 'printf "nameserver 127.7.7.7\n" | resolvconf -a original0'
+
+  add_dummy_iface "$cid" dummy0
+}

@@ -13,11 +13,11 @@
 //! code path worth locking in):
 //!
 //! * `docker/run.sh` - systemd-resolved.
-//! * `docker/run-resolvconf.sh` - resolvconf, with
+//! * `docker/resolvconf.bats` - resolvconf, with
 //!   `TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no` so `probe()`
 //!   actually picks it (see `src/linux/resolvconf.rs`, "Loopback
 //!   truncation" - with the default `y`, `probe()` refuses this backend).
-//! * `docker/run-resolvconf-truncating.sh` - resolvconf left at that
+//! * `docker/resolvconf_truncating.bats` - resolvconf left at that
 //!   default, verifying `probe()`'s refusal and the fall-through to
 //!   `static-resolv-conf` end to end.
 //! * `docker/static.bats` - no DNS manager at all, straight to

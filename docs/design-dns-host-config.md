@@ -352,7 +352,7 @@ code path:
   observable behaviour (out-of-suffix queries reach the pre-existing
   resolver) but get there differently, which is exactly what the unified
   test is checking.
-* `resolvconf` (`docker/run-resolvconf.sh`): verified end to end, with
+* `resolvconf` (`docker/resolvconf.bats`): verified end to end, with
   `TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no` set so
   `Resolvconf::probe()` actually accepts the backend - Debian
   `resolvconf`'s default (`y`) otherwise truncates the merged nameserver
@@ -361,7 +361,7 @@ code path:
   (reproduces from a plain shell `resolvconf -a`, nothing to do with how
   this crate spawns it) is what `probe()` now detects and refuses - see
   `src/linux/resolvconf.rs`, "Loopback truncation".
-* resolvconf fall-through (`docker/run-resolvconf-truncating.sh`): the
+* resolvconf fall-through (`docker/resolvconf_truncating.bats`): the
   same container, left at resolvconf's default (truncating) config,
   verifying `probe()`'s refusal and the fall-through to
   `static-resolv-conf` end to end - the configuration most real hosts
