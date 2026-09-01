@@ -45,6 +45,40 @@ for the full planned backend chain (NetworkManager, resolvconf, static
 `/etc/resolv.conf` on Linux; `/etc/resolver/<suffix>` on macOS; NRPT on
 Windows) and the architecture notes it's based on.
 
+## Testing
+
+Unit tests are plain `cargo test`. The backend integration tests
+(`tests/*_linux.rs`, all `#[ignore]`d) need a real host DNS stack, so
+they run inside Docker via a [bats](https://github.com/bats-core/bats-core)
+suite under `docker/` — one `.bats` file per host configuration:
+
+| file | container | backend `probe()` picks |
+| --- | --- | --- |
+| `docker/systemd_resolved.bats` | systemd + systemd-resolved | `systemd-resolved` |
+| `docker/resolvconf.bats` | resolvconf, truncation off | `resolvconf` |
+| `docker/resolvconf_truncating.bats` | resolvconf, default config | `static-resolv-conf` (fall-through) |
+| `docker/static.bats` | no DNS manager | `static-resolv-conf` |
+
+Each file builds an image, boots one container in `setup_file`, runs the
+compiled `tests/*_linux.rs` binaries inside it, and removes the container
+in `teardown_file`.
+
+Prerequisites: `docker`, `bats`, `jq`, a Rust toolchain, and GNU
+`parallel` if you want `--jobs`.
+
+```sh
+cd crates/dns-host-config
+bats docker/*.bats                 # whole suite, serially
+bats docker/static.bats           # one configuration
+bats --jobs 4 docker/*.bats       # all four in parallel (needs `parallel`)
+```
+
+`--jobs` runs up to four privileged containers concurrently, one of them
+a full `systemd` boot. That's fine on a dev machine; a CI runner may need
+headroom for it. The two resolvconf files build the same image tag —
+concurrent identical builds are harmless (BuildKit deduplicates), which
+is why the build isn't hoisted into a shared step.
+
 ## License
 
 Apache-2.0, same as `dns-stack`.
