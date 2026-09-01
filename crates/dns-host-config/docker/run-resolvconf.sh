@@ -1,17 +1,20 @@
 #!/bin/sh
-# Boot a minimal container with resolvconf(8) and nothing else touching
-# DNS, register a fake "pre-existing resolver" with it, create the dummy0
+# Boot a minimal container with resolvconf(8), with
+# TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS explicitly turned off,
+# register a fake "pre-existing resolver" with it, create the dummy0
 # interface, then run tests/conditional_forwarding_linux.rs against it -
-# the same test docker/run.sh (systemd-resolved) also runs, so conditional
+# the same unified test docker/run.sh (systemd-resolved) and
+# docker/run-static.sh (no DNS manager at all) also run, so conditional
 # forwarding is verified to behave identically regardless of which backend
-# LinuxDnsRoute::probe() actually picks. A static-resolv-conf variant of
-# this script is a planned addition, not built yet.
+# LinuxDnsRoute::probe() actually picks.
 #
-# KNOWN FAILING right now: the second assertion (a name outside our suffix
-# falls through to the pre-registered resolver below) fails - see
-# src/linux/resolvconf.rs, "Known issue: the merge doesn't happen when
-# driven from this code (unresolved)". The first assertion (our suffix
-# resolves through us) passes.
+# The knob has to be off for this script to test what its name promises:
+# Debian resolvconf's default (on) truncates the merged nameserver list
+# right after our loopback-addressed entry, which makes probe() refuse
+# this backend and fall through to static-resolv-conf instead - see
+# src/linux/resolvconf.rs, "Loopback truncation". That fall-through case,
+# with the knob left at its default, is covered separately by
+# docker/run-resolvconf-truncating.sh.
 #
 # Extra args are forwarded to the test binary (e.g. a test-name filter).
 set -eu
@@ -28,31 +31,15 @@ bin=$(cargo test --no-run --message-format=json-render-diagnostics --test condit
       | jq -r 'select(.executable != null and .target.name == "conditional_forwarding_linux") | .executable')
 [ -n "$bin" ] && [ -x "$bin" ] || { echo "test binary not found" >&2; exit 1; }
 
-docker build -f docker/Dockerfile.resolvconf -t dns-host-config-resolvconf docker/
+# shellcheck source=docker/resolvconf-container-common.sh
+. docker/resolvconf-container-common.sh
+TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no
+export TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS
+start_resolvconf_container
 
-cid=$(docker run -d --rm --privileged --cgroupns=host \
-        --tmpfs /run --tmpfs /tmp \
-        -v "$bin":/conditional_forwarding_linux:ro \
-        dns-host-config-resolvconf)
-trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-
-# resolvconf(8) gets installed here, not baked into the image - see
-# Dockerfile.resolvconf for why. Point resolv.conf at a real resolver
-# first (Docker's own bind-mounted one is usually already fine, but
-# --privileged lets us also just replace it outright) so `apt-get
-# update` itself can resolve deb.debian.org.
-docker exec "$cid" sh -c 'umount /etc/resolv.conf 2>/dev/null; echo "nameserver 8.8.8.8" > /etc/resolv.conf'
-docker exec "$cid" apt-get update -qq
-docker exec "$cid" apt-get install -y -qq --no-install-recommends resolvconf iproute2
-
-# Register the test's fake "pre-existing resolver" (see
-# tests/conditional_forwarding_linux.rs, ORIGINAL_SERVER_ADDR) under a
-# name resolvconf's default interface-order treats as low-priority
-# (falls into the catch-all "*" bucket), so it plays the same role real
-# original resolvers do relative to our own tun*-prefixed registration.
-docker exec "$cid" sh -c 'echo "nameserver 127.7.7.7" | resolvconf -a original0'
-
-docker exec "$cid" ip link add dummy0 type dummy
-docker exec "$cid" ip link set dummy0 up
-
-exec docker exec "$cid" /conditional_forwarding_linux --ignored --nocapture --test-threads=1 "$@"
+# Not `exec`: that would replace this shell process instead of letting it
+# exit normally, and the EXIT trap that removes $cid (set inside
+# start_resolvconf_container) only fires on a normal exit - `exec`'d here,
+# the container would leak on every run regardless of --rm.
+# shellcheck disable=SC2154 # $cid is set by start_resolvconf_container() in the sourced file
+docker exec "$cid" /conditional_forwarding_linux --ignored --nocapture --test-threads=1 "$@"

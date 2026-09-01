@@ -7,16 +7,27 @@
 //! REFUSED-fallback mechanism documented in
 //! docs/design-dns-host-config.md.
 //!
-//! Currently wired into `docker/run-resolvconf.sh` only. A systemd-
-//! resolved variant and a static-resolv-conf variant are both planned but
-//! not wired up yet (the systemd-resolved case needs its own deterministic
-//! "pre-existing resolver" setup, which is a separate, not-yet-solved
-//! problem from what this test itself checks).
+//! Wired into all four Docker harnesses, one per backend
+//! `LinuxDnsRoute::probe()` can pick (plus the resolvconf/loopback-
+//! truncation fall-through, which isn't a distinct backend but is its own
+//! code path worth locking in):
 //!
-//! Status: the resolvconf run currently fails its second assertion - see
-//! src/linux/resolvconf.rs, "Known issue: the merge doesn't happen when
-//! driven from this code (unresolved)". The first assertion (our suffix
-//! resolves through us) passes.
+//! * `docker/run.sh` - systemd-resolved.
+//! * `docker/run-resolvconf.sh` - resolvconf, with
+//!   `TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no` so `probe()`
+//!   actually picks it (see `src/linux/resolvconf.rs`, "Loopback
+//!   truncation" - with the default `y`, `probe()` refuses this backend).
+//! * `docker/run-resolvconf-truncating.sh` - resolvconf left at that
+//!   default, verifying `probe()`'s refusal and the fall-through to
+//!   `static-resolv-conf` end to end.
+//! * `docker/run-static.sh` - no DNS manager at all, straight to
+//!   `static-resolv-conf`.
+//!
+//! Each script's "pre-existing resolver" setup looks different because
+//! each backend represents "already configured" differently - a merged
+//! flat-file record for resolvconf/static, a second default-route link
+//! for systemd-resolved (which routes per query by domain, not by
+//! merging a nameserver list) - see each script for how.
 //!
 //! This test starts *both* fake DNS servers itself - the "VPN resolver"
 //! (`VPN_SERVER_ADDR`, answers `*.myvpn` and REFUSED otherwise, like

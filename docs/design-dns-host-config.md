@@ -337,22 +337,38 @@ we just have to arrange the nameserver list correctly:
 Both `StaticResolvConf` and `Resolvconf` implement the above (own server
 first, original nameservers after, for a non-empty `routing_domains`) and
 are unit-tested. End-to-end verification against a real host, via
-`crates/dns-host-config/tests/conditional_forwarding_linux.rs` and a
-per-backend Docker container:
+`crates/dns-host-config/tests/conditional_forwarding_linux.rs` running
+against four Docker harnesses - one per backend `LinuxDnsRoute::probe()`
+can pick, plus the resolvconf/loopback-truncation fall-through as its own
+code path:
 
-* `systemd-resolved`: verified end to end (a different, separate test file,
-  `tests/systemd_resolved_linux.rs` / `tests/chain_linux.rs` - the unified
-  conditional-forwarding test isn't wired up for this backend yet, see
-  below).
-* `resolvconf`: the `tun*`-priority registration trick is verified to work
-  when `resolvconf -a` is invoked from a shell. Driven through this crate's
-  own code (`Resolvconf::run`, i.e. what `set()` actually calls), the merge
-  with other already-registered interfaces does not happen - see
-  `src/linux/resolvconf.rs`, "Known issue: the merge doesn't happen when
-  driven from this code (unresolved)," for the full account of what's been
-  ruled out. Unresolved as of this writing.
-* Static `/etc/resolv.conf` fallback: unit-tested only; no Docker
-  end-to-end run yet (no container variant built for it).
+* `systemd-resolved` (`docker/run.sh`): verified end to end, both via the
+  unified test and via the backend-specific `tests/systemd_resolved_linux.rs`
+  / `tests/chain_linux.rs`. Since `resolved` routes each query by domain
+  rather than merging a flat nameserver list, "the host's pre-existing
+  resolver" is set up as a second link marked as the default-route target
+  (`resolvectl default-route <link> yes`) with its own DNS server, not a
+  registered record - the two mechanisms happen to converge on the same
+  observable behaviour (out-of-suffix queries reach the pre-existing
+  resolver) but get there differently, which is exactly what the unified
+  test is checking.
+* `resolvconf` (`docker/run-resolvconf.sh`): verified end to end, with
+  `TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no` set so
+  `Resolvconf::probe()` actually accepts the backend - Debian
+  `resolvconf`'s default (`y`) otherwise truncates the merged nameserver
+  list right after our (loopback, first-sorted) entry, dead-ending an
+  out-of-suffix query at our `REFUSED`. That default's own behaviour
+  (reproduces from a plain shell `resolvconf -a`, nothing to do with how
+  this crate spawns it) is what `probe()` now detects and refuses - see
+  `src/linux/resolvconf.rs`, "Loopback truncation".
+* resolvconf fall-through (`docker/run-resolvconf-truncating.sh`): the
+  same container, left at resolvconf's default (truncating) config,
+  verifying `probe()`'s refusal and the fall-through to
+  `static-resolv-conf` end to end - the configuration most real hosts
+  with `resolvconf` installed actually have.
+* Static `/etc/resolv.conf` fallback (`docker/run-static.sh`): verified
+  end to end, no DNS manager present at all so `probe()` falls all the
+  way through to it directly.
 
 ### macOS: two backends, pick based on intent
 

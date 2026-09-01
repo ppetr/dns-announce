@@ -1,0 +1,12 @@
+# Minimal container with no DNS manager at all - no systemd-resolved, no
+# resolvconf, no NetworkManager - so LinuxDnsRoute::probe() must fall
+# through every smarter backend and land on StaticResolvConf. iproute2 is
+# baked in (only needed to create the dummy0 test interface); unlike
+# Dockerfile.resolvconf, there's nothing installed at container-run time,
+# so this image needs no network access of its own to boot.
+FROM debian:stable-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["sleep", "infinity"]
