@@ -1,5 +1,5 @@
 # A minimal (no systemd/init) container that gets resolvconf(8) installed
-# at *run* time (see docker/run-resolvconf.sh), not baked into the image.
+# at *run* time (see docker/resolvconf.bats), not baked into the image.
 #
 # `docker build` RUN steps don't have CAP_SYS_ADMIN, so resolvconf's
 # postinst can't replace Docker's bind-mounted /etc/resolv.conf with its

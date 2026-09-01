@@ -2,7 +2,7 @@
 # so the SystemdResolved backend's D-Bus calls can be exercised against a
 # real resolved instance without touching the host's own configuration.
 #
-# No networkd, no libnss-resolve: docker/run.sh drives resolved directly
+# No networkd, no libnss-resolve: docker/systemd_resolved.bats drives resolved directly
 # over D-Bus and checks the result with `resolvectl`, it never resolves a
 # name through nsswitch.
 FROM debian:stable-slim

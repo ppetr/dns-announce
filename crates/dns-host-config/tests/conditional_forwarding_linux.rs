@@ -12,7 +12,7 @@
 //! truncation fall-through, which isn't a distinct backend but is its own
 //! code path worth locking in):
 //!
-//! * `docker/run.sh` - systemd-resolved.
+//! * `docker/systemd_resolved.bats` - systemd-resolved.
 //! * `docker/resolvconf.bats` - resolvconf, with
 //!   `TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no` so `probe()`
 //!   actually picks it (see `src/linux/resolvconf.rs`, "Loopback
@@ -82,7 +82,7 @@ async fn spawn_fixed_answer_server(addr: Ipv4Addr, verdict: Verdict) {
         .unwrap_or_else(|e| {
             panic!(
                 "binding the fake DNS server on {addr}:53: {e} - needs \
-                 CAP_NET_BIND_SERVICE or root, see docker/run*.sh"
+                 CAP_NET_BIND_SERVICE or root, see docker/*.bats"
             )
         });
     tokio::spawn(run_server(socket, verdict));
@@ -207,7 +207,7 @@ fn query_qtype(query: &[u8]) -> Option<u16> {
 // single-threaded #[tokio::test] runtime, both would fight over the one
 // available thread and deadlock.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the harness's ORIGINAL_SERVER_ADDR pre-registration + dummy0; run via one of docker/run*.sh"]
+#[ignore = "needs the harness's ORIGINAL_SERVER_ADDR pre-registration + dummy0; run via one of docker/*.bats"]
 async fn conditional_forwarding_via_the_auto_detected_backend() {
     spawn_fixed_answer_server(
         VPN_SERVER_ADDR,

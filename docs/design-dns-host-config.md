@@ -342,9 +342,10 @@ against four Docker harnesses - one per backend `LinuxDnsRoute::probe()`
 can pick, plus the resolvconf/loopback-truncation fall-through as its own
 code path:
 
-* `systemd-resolved` (`docker/run.sh`): verified end to end, both via the
-  unified test and via the backend-specific `tests/systemd_resolved_linux.rs`
-  / `tests/chain_linux.rs`. Since `resolved` routes each query by domain
+* `systemd-resolved` (`docker/systemd_resolved.bats`): verified end to
+  end, both via the unified test and via the backend-specific
+  `tests/systemd_resolved_linux.rs` / `tests/chain_linux.rs`. Since
+  `resolved` routes each query by domain
   rather than merging a flat nameserver list, "the host's pre-existing
   resolver" is set up as a second link marked as the default-route target
   (`resolvectl default-route <link> yes`) with its own DNS server, not a

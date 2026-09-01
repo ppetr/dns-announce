@@ -60,6 +60,18 @@ remove_container() {
   docker rm -f "$1" >/dev/null 2>&1 || true
 }
 
+# wait_for_systemd <cid> - block until the container's systemd reports
+# "running" or "degraded" (up to ~30s), then echo the final state.
+wait_for_systemd() {
+  local cid=$1 state="" i
+  for ((i = 0; i < 30; i++)); do
+    state=$(docker exec "$cid" systemctl is-system-running 2>/dev/null || true)
+    case $state in running | degraded) break ;; esac
+    sleep 1
+  done
+  printf '%s\n' "${state:-unknown}"
+}
+
 # add_dummy_iface <cid> <name> [cidr] - create an up dummy interface,
 # optionally with an address (systemd-resolved needs one before it will
 # open a DNS scope on the link).

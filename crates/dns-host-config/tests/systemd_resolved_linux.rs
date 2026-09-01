@@ -1,5 +1,5 @@
 //! Exercises the real `SystemdResolved` backend against `systemd-resolved`
-//! running in a container (see docker/run.sh), which also creates the
+//! running in a container (see docker/systemd_resolved.bats), which also creates the
 //! `dummy0` interface this test targets. `#[ignore]` because it needs a
 //! real system bus with `resolved` on it and a `dummy0` link to exist.
 
@@ -22,7 +22,7 @@ fn resolvectl(args: &[&str]) -> String {
 }
 
 #[tokio::test]
-#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/run.sh"]
+#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/systemd_resolved.bats"]
 async fn set_pushes_dns_and_routing_domain_then_reset_clears_them() {
     let mut backend = SystemdResolved::probe()
         .await
@@ -64,7 +64,7 @@ async fn set_pushes_dns_and_routing_domain_then_reset_clears_them() {
 }
 
 #[tokio::test]
-#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/run.sh"]
+#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/systemd_resolved.bats"]
 async fn reset_without_a_prior_set_is_a_harmless_no_op() {
     let mut backend = SystemdResolved::probe()
         .await

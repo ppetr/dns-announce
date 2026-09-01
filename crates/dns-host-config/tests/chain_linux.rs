@@ -1,5 +1,5 @@
 //! Exercises `LinuxDnsRoute::probe()` against the same container as
-//! `tests/systemd_resolved_linux.rs` (see docker/run.sh): with a real
+//! `tests/systemd_resolved_linux.rs` (see docker/systemd_resolved.bats): with a real
 //! systemd-resolved and no resolvconf/NetworkManager competing for
 //! attention, it should auto-detect the systemd-resolved backend and its
 //! set()/reset() should work exactly like driving `SystemdResolved`
@@ -24,14 +24,14 @@ fn resolvectl(args: &[&str]) -> String {
 }
 
 #[tokio::test]
-#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/run.sh"]
+#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/systemd_resolved.bats"]
 async fn auto_detection_picks_systemd_resolved_in_this_container() {
     let route = LinuxDnsRoute::probe("dns-host-config-test").await;
     assert_eq!(route.backend_name(), "systemd-resolved");
 }
 
 #[tokio::test]
-#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/run.sh"]
+#[ignore = "needs a running systemd-resolved + dummy0 interface; run via docker/systemd_resolved.bats"]
 async fn set_and_reset_work_through_the_auto_detected_backend() {
     let mut route = LinuxDnsRoute::probe("dns-host-config-test").await;
 
