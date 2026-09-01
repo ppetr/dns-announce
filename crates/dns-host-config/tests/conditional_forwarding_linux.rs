@@ -20,7 +20,7 @@
 //! * `docker/run-resolvconf-truncating.sh` - resolvconf left at that
 //!   default, verifying `probe()`'s refusal and the fall-through to
 //!   `static-resolv-conf` end to end.
-//! * `docker/run-static.sh` - no DNS manager at all, straight to
+//! * `docker/static.bats` - no DNS manager at all, straight to
 //!   `static-resolv-conf`.
 //!
 //! Each script's "pre-existing resolver" setup looks different because

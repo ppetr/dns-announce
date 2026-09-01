@@ -366,7 +366,7 @@ code path:
   verifying `probe()`'s refusal and the fall-through to
   `static-resolv-conf` end to end - the configuration most real hosts
   with `resolvconf` installed actually have.
-* Static `/etc/resolv.conf` fallback (`docker/run-static.sh`): verified
+* Static `/etc/resolv.conf` fallback (`docker/static.bats`): verified
   end to end, no DNS manager present at all so `probe()` falls all the
   way through to it directly.
 
