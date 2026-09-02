@@ -54,15 +54,4 @@ pub trait DnsRoute: Send {
     /// Undoes whatever the last `set()` did. A no-op if `set()` was never
     /// called or has already been undone.
     async fn reset(&mut self) -> Result<(), Self::Error>;
-
-    /// Like [`reset`](Self::reset), but called just before `interface` is
-    /// destroyed. The default just calls `reset()`; a backend whose state
-    /// is scoped to the interface by the OS itself (e.g. systemd-resolved's
-    /// per-link config, which disappears with the link) can leave this as
-    /// a no-op, but a backend that persists state elsewhere (a file on
-    /// disk) needs to actually clean it up here, since there will be no
-    /// interface left to key that cleanup off of afterwards.
-    async fn reset_before_interface_removal(&mut self) -> Result<(), Self::Error> {
-        self.reset().await
-    }
 }
