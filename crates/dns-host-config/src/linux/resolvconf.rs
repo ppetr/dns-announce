@@ -166,14 +166,10 @@ impl Resolvconf {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        // Rust's runtime sets SIGPIPE to SIG_IGN for itself and spawned
-        // children inherit that by default, unlike a process started from
-        // an interactive shell. resolvconf(8) is a shell script that pipes
-        // between its own internal commands and is written expecting the
-        // default SIGPIPE disposition - reset it before exec so it runs as
-        // it would from a shell. (This is unrelated to the loopback
-        // truncation in the module docs, which is resolvconf's own
-        // configured behaviour and reproduces straight from a shell.)
+        // Rust ignores SIGPIPE process-wide and children inherit that,
+        // unlike a shell-spawned process. resolvconf(8) is a shell script
+        // that pipes between internal commands and expects the default
+        // disposition - restore it before exec.
         unsafe {
             command.pre_exec(|| {
                 if libc::signal(libc::SIGPIPE, libc::SIG_DFL) == libc::SIG_ERR {
