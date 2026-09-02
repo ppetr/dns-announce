@@ -162,3 +162,26 @@ impl DnsRoute for LinuxDnsRoute {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // static-resolv-conf is the one backend that needs no host probe, so
+    // it exercises the DNS_HOST_CONFIG_BACKEND name dispatch without
+    // depending on what's installed on the machine running the tests.
+    #[tokio::test]
+    async fn override_dispatch_resolves_a_known_backend_name() {
+        let backend = LinuxDnsRoute::probe_named("static-resolv-conf", "test".into())
+            .await
+            .expect("static-resolv-conf is always constructible");
+        assert_eq!(backend.name(), "static-resolv-conf");
+    }
+
+    #[tokio::test]
+    async fn override_dispatch_rejects_an_unknown_backend_name() {
+        assert!(LinuxDnsRoute::probe_named("not-a-backend", "test".into())
+            .await
+            .is_none());
+    }
+}
