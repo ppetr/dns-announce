@@ -9,19 +9,16 @@
 //! `/etc/resolv.conf` edit. (NetworkManager is a planned addition - see
 //! `docs/design-dns-host-config.md` - not implemented yet.)
 //!
-//! ## What "bullet-proof" does *not* mean
+//! ## What "always returns something" does *not* guarantee
 //!
-//! `probe()` always returns a usable backend, but that backend might not
-//! be able to honor every [`DnsRouteConfig`]: only `systemd-resolved` can
-//! do conditional forwarding (a non-empty `routing_domains`).
-//! `resolvconf` and the static-file fallback both refuse such a config
-//! outright rather than silently applying it as a global override - see
-//! their own module docs. Auto-detection picks a backend based on what's
-//! usable on the host, once, at `probe()` time; it does not look ahead at
-//! what a later `set()` call will ask for. A caller that needs conditional
-//! forwarding specifically should check
-//! [`backend_name`](LinuxDnsRoute::backend_name) or simply handle a
-//! `set()` error from a backend that can't do it.
+//! All three Linux backends do conditional forwarding, but differently:
+//! `systemd-resolved` routes per query by domain; `resolvconf` and the
+//! static-file fallback depend on the pushed server answering `REFUSED`
+//! for out-of-domain names so glibc falls through to the original
+//! resolvers (see their module docs). Point those two at a general
+//! recursive resolver instead of a `REFUSED`-on-miss one and there is no
+//! fallback. `probe()` also picks a backend once, from what's usable on
+//! the host, without looking at what a later `set()` will ask for.
 //!
 //! ## Overriding the choice
 //!
