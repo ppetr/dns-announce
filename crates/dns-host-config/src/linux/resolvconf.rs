@@ -27,40 +27,24 @@
 //!
 //! ## Loopback truncation: why `probe()` also rejects a truncating `resolvconf`
 //!
-//! Debian's `resolvconf` package regenerates `/etc/resolv.conf` through
+//! Debian's `resolvconf` regenerates `/etc/resolv.conf` through
 //! `/etc/resolvconf/update.d/libc`, which by default truncates the merged
-//! nameserver list right after the first loopback address it emits
-//! (`127.0.0.0/8` or `::1`): it assumes a local caching resolver is
-//! listening there and that nothing after it should be consulted. The
-//! knob is `TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS` (default `y`,
-//! legacy spelling `TRUNCATE_NAMESERVER_LIST_AFTER_127`), overridable in
-//! `/etc/default/resolvconf`.
+//! nameserver list right after the first loopback address
+//! (`TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS`, overridable in
+//! `/etc/default/resolvconf`). Since `set()` registers under a
+//! `tun*`-priority name so our entry sorts first, a caller pushing a
+//! loopback DNS address (a common local-forwarder setup) then loses every
+//! *other* resolver from the generated file, and an out-of-suffix query
+//! dead-ends at our `REFUSED`. This is resolvconf's own behaviour - it
+//! reproduces from a plain shell `resolvconf -a`.
 //!
-//! That default is fatal to REFUSED-fallback here. `set()` registers
-//! under a `tun*`-priority name precisely so our entry sorts *first*; a
-//! caller pushing a loopback DNS address - a local forwarder or proxy is
-//! a common setup - would then have every *other* registered resolver
-//! dropped from the generated `/etc/resolv.conf`, so an out-of-suffix
-//! query dead-ends at our `REFUSED` instead of falling through. The
-//! per-interface files under `/run/resolvconf/interface/` stay intact;
-//! only the merged output loses them. This reproduces identically from a
-//! plain shell `resolvconf -a` - it is resolvconf's configured behaviour,
-//! nothing to do with how this module spawns it.
-//!
-//! `probe()` reads the updater script and `/etc/default/resolvconf` and,
-//! when that truncation is in effect, refuses this backend so the chain
-//! falls through to the next one. It does *not* try to flip the knob
-//! itself: that is a global change to a shared host component that
-//! weakens a deliberate safety default for every other resolver on the
-//! box. `openresolv` has no equivalent default and is not matched by the
-//! check.
-//!
-//! The check is deliberately conservative - it rejects a truncating
-//! `resolvconf` up front, even though the truncation only actually bites
-//! when a pushed server is a loopback address. `probe()` does not see the
-//! servers a later `set()` will carry, and this crate exists only to do
-//! REFUSED-fallback, so an install where that can silently break is not
-//! worth preferring over the static-`/etc/resolv.conf` backend.
+//! So `probe()` reads that config and refuses the backend when the
+//! truncation is on, letting the chain fall through rather than silently
+//! misbehave. It won't flip the knob itself (a host-wide safety default),
+//! and it's conservative: `probe()` can't see a later `set()`'s servers,
+//! so it rejects a truncating `resolvconf` even though only loopback
+//! servers hit the bug. `openresolv` has no such default and isn't
+//! matched.
 //!
 //! ## Known gap
 //!
