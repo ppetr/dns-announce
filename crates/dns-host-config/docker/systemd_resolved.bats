@@ -1,14 +1,13 @@
 #!/usr/bin/env bats
 #
 # The systemd-resolved backend: a container running systemd +
-# systemd-resolved and nothing else touching DNS. Three compiled Rust
+# systemd-resolved and nothing else touching DNS. Two compiled Rust
 # integration tests run against it, sharing one container:
 #
 #   systemd_resolved_linux       - SetDNS/SetDomains + reset, checked
 #                                  directly against a real resolved
-#   chain_linux                  - auto-detection picks systemd-resolved,
-#                                  set/reset work through the chain
-#   conditional_forwarding_linux - the unified split-DNS test
+#   conditional_forwarding_linux - the unified split-DNS test (drives the
+#                                  LinuxDnsRoute chain end to end)
 #
 # They set()/reset() the same dummy0 link in turn, so this file opts out
 # of within-file parallelization (setup_file below).
@@ -30,7 +29,7 @@ setup_file() {
   export BATS_NO_PARALLELIZE_WITHIN_FILE=true
 
   local t bin mounts=()
-  for t in systemd_resolved_linux chain_linux conditional_forwarding_linux; do
+  for t in systemd_resolved_linux conditional_forwarding_linux; do
     bin=$(compile_test_binary "$t") || return 1
     mounts+=(-v "$bin:/$t:ro")
   done
@@ -60,11 +59,6 @@ teardown_file() {
 
 @test "systemd_resolved_linux: SetDNS/SetDomains and reset against a real resolved" {
   run run_rust_test "$DHC_CID" systemd_resolved_linux
-  [ "$status" -eq 0 ]
-}
-
-@test "chain_linux: auto-detection picks systemd-resolved and set/reset work" {
-  run run_rust_test "$DHC_CID" chain_linux
   [ "$status" -eq 0 ]
 }
 

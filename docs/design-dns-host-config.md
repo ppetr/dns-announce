@@ -344,10 +344,10 @@ code path:
 
 * `systemd-resolved` (`docker/systemd_resolved.bats`): verified end to
   end, both via the unified test and via the backend-specific
-  `tests/systemd_resolved_linux.rs` / `tests/chain_linux.rs`. Since
-  `resolved` routes each query by domain
-  rather than merging a flat nameserver list, "the host's pre-existing
-  resolver" is set up as a second link marked as the default-route target
+  `tests/systemd_resolved_linux.rs`. Since `resolved` routes each query by
+  domain rather than merging a flat nameserver list, "the host's
+  pre-existing resolver" is set up as a second link marked as the
+  default-route target
   (`resolvectl default-route <link> yes`) with its own DNS server, not a
   registered record - the two mechanisms happen to converge on the same
   observable behaviour (out-of-suffix queries reach the pre-existing
