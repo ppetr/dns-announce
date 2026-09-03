@@ -3,11 +3,8 @@ use std::net::IpAddr;
 
 /// What to push into the host's DNS configuration for one interface.
 ///
-/// `routing_domains` is normalized on construction: domains are
-/// lowercased, deduplicated, and a domain already covered by a shorter
-/// domain in the same list is dropped (`dev.corp.internal` is redundant
-/// once `corp.internal` is present, since routing by suffix already
-/// matches it).
+/// `routing_domains` is normalized on construction: lowercased, trailing
+/// dot stripped, deduplicated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsRouteConfig {
     pub servers: Vec<IpAddr>,
@@ -70,21 +67,7 @@ fn normalize_domains(domains: Vec<String>) -> Vec<String> {
         .collect();
     cleaned.sort_unstable();
     cleaned.dedup();
-
     cleaned
-        .iter()
-        .filter(|candidate| {
-            !cleaned
-                .iter()
-                .any(|other| other != *candidate && is_subdomain_of(candidate, other))
-        })
-        .cloned()
-        .collect()
-}
-
-/// Whether `name` is `suffix` itself or a subdomain of it.
-fn is_subdomain_of(name: &str, suffix: &str) -> bool {
-    name == suffix || name.ends_with(&format!(".{suffix}"))
 }
 
 #[cfg(test)]
@@ -123,41 +106,12 @@ mod tests {
     }
 
     #[test]
-    fn dedups_domains() {
+    fn sorts_and_dedups_domains() {
         let cfg = DnsRouteConfig::new(
             vec![addr()],
-            vec!["myvpn.example".into(), "myvpn.example".into()],
+            vec!["b.example".into(), "a.example".into(), "b.example".into()],
         )
         .unwrap();
-        assert_eq!(cfg.routing_domains, vec!["myvpn.example"]);
-    }
-
-    #[test]
-    fn drops_domains_covered_by_a_shorter_one() {
-        let cfg = DnsRouteConfig::new(
-            vec![addr()],
-            vec![
-                "dev.corp.internal".into(),
-                "corp.internal".into(),
-                "other.example".into(),
-            ],
-        )
-        .unwrap();
-        assert_eq!(cfg.routing_domains, vec!["corp.internal", "other.example"]);
-    }
-
-    #[test]
-    fn keeps_unrelated_domains_with_a_shared_suffix_label() {
-        // "notcorp.internal" is not a subdomain of "corp.internal" - it
-        // just happens to share the "internal" TLD-ish label.
-        let cfg = DnsRouteConfig::new(
-            vec![addr()],
-            vec!["corp.internal".into(), "notcorp.internal".into()],
-        )
-        .unwrap();
-        assert_eq!(
-            cfg.routing_domains,
-            vec!["corp.internal", "notcorp.internal"]
-        );
+        assert_eq!(cfg.routing_domains, vec!["a.example", "b.example"]);
     }
 }
