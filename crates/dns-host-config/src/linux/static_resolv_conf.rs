@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn re_setting_with_routing_domains_keeps_pulling_the_real_original_from_backup() {
+    async fn re_setting_reads_the_real_original_from_backup_not_our_own_output() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("resolv.conf");
         fs::write(&path, "nameserver 9.9.9.9\n").unwrap();
@@ -404,9 +404,10 @@ mod tests {
         )
         .await
         .unwrap();
-        // set() again, as if reapplying a changed config - the appended
-        // fallback nameserver must still be the real original (9.9.9.9),
-        // not our own previous output from the line above.
+        // set() again, as if reapplying a changed config. Both the
+        // appended fallback nameserver now and the file restored by
+        // reset() must be the real original (9.9.9.9), never our own
+        // previous output.
         b.set(
             "eth0",
             &config_with_routing_domains("5.6.7.8", &["myvpn.example"]),
@@ -414,28 +415,14 @@ mod tests {
         .await
         .unwrap();
 
-        let written = fs::read_to_string(&path).unwrap();
-        let servers: Vec<&str> = written
+        let servers: Vec<String> = fs::read_to_string(&path)
+            .unwrap()
             .lines()
-            .filter_map(|l| l.strip_prefix("nameserver "))
+            .filter_map(|l| l.strip_prefix("nameserver ").map(str::to_string))
             .collect();
         assert_eq!(servers, ["5.6.7.8", "9.9.9.9"]);
-    }
-
-    #[tokio::test]
-    async fn re_setting_with_the_same_owner_does_not_clobber_the_original_backup() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("resolv.conf");
-        let original = "nameserver 9.9.9.9\n";
-        fs::write(&path, original).unwrap();
-
-        let mut b = StaticResolvConf::with_path("test-owner", &path);
-        b.set("eth0", &config("1.2.3.4")).await.unwrap();
-        // set() again, as if reapplying a changed config - must not back
-        // up its own already-applied output over the real original.
-        b.set("eth0", &config("5.6.7.8")).await.unwrap();
 
         b.reset().await.unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "nameserver 9.9.9.9\n");
     }
 }
