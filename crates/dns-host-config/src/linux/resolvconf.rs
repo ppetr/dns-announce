@@ -220,6 +220,8 @@ fn points_at_resolvectl(path: &Path) -> bool {
 const LIBC_UPDATER: &str = "/etc/resolvconf/update.d/libc";
 /// Where that updater sources variable overrides from.
 const RESOLVCONF_DEFAULTS: &str = "/etc/default/resolvconf";
+/// The knob in [`RESOLVCONF_DEFAULTS`] that switches the truncation off.
+const TRUNCATE_KNOB: &str = "TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS";
 
 /// Whether the `resolvconf` installed on this host will drop every
 /// nameserver after a leading loopback address from the merged
@@ -234,51 +236,35 @@ fn truncates_at(updater: &Path, defaults: &Path) -> bool {
     let Ok(updater_src) = std::fs::read_to_string(updater) else {
         return false;
     };
-    if !updater_src.contains("TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS") {
-        return false;
-    }
-    let defaults_src = std::fs::read_to_string(defaults).unwrap_or_default();
-    truncation_default_is_on(&defaults_src)
+    updater_src.contains(TRUNCATE_KNOB)
+        && truncation_enabled(&std::fs::read_to_string(defaults).unwrap_or_default())
 }
 
-/// Mirrors the default-resolution at the top of Debian `resolvconf`'s
-/// libc updater: the current-name variable wins if set to a non-empty
-/// value, else the legacy `_127` spelling, else the built-in default
-/// (`y`); truncation is active only for an affirmative value (`y`/`yes`,
-/// any case), matching the script's `case` arm exactly.
-fn truncation_default_is_on(defaults_src: &str) -> bool {
-    let current = last_sh_assignment(
-        defaults_src,
-        "TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS",
-    );
-    let legacy = last_sh_assignment(defaults_src, "TRUNCATE_NAMESERVER_LIST_AFTER_127");
-    let effective = current
-        .filter(|v| !v.is_empty())
-        .or_else(|| legacy.filter(|v| !v.is_empty()));
-    match effective {
+/// Whether the updater's truncation is in effect given the contents of
+/// `/etc/default/resolvconf`. It is on by default; the file turns it off
+/// only by assigning [`TRUNCATE_KNOB`] a non-affirmative value. Matches
+/// the updater's own `case` arm: only `y`/`yes` (any case) count as on,
+/// an empty assignment counts as unset, later assignments win.
+fn truncation_enabled(defaults_src: &str) -> bool {
+    let last_value = defaults_src
+        .lines()
+        .filter_map(|line| {
+            let value = line
+                .trim()
+                .strip_prefix(TRUNCATE_KNOB)?
+                .strip_prefix('=')?
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'');
+            (!value.is_empty()).then(|| value.to_owned())
+        })
+        .next_back();
+    match last_value {
         Some(v) => matches!(v.as_str(), "y" | "Y" | "yes" | "YES" | "Yes"),
         None => true,
     }
-}
-
-/// The value of the last `NAME=value` assignment to `name` in a shell
-/// fragment (later assignments win, as `sh` would evaluate them), with an
-/// optional `export `, surrounding quotes, and any trailing comment
-/// stripped. Not a shell parser - just enough for the flat `KEY=value`
-/// lines `/etc/default/resolvconf` actually holds.
-fn last_sh_assignment(src: &str, name: &str) -> Option<String> {
-    src.lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let line = line.strip_prefix("export ").unwrap_or(line);
-            let value = line.strip_prefix(name)?.strip_prefix('=')?;
-            let value = value
-                .split(|c: char| c.is_whitespace() || c == '#')
-                .next()
-                .unwrap_or("");
-            Some(value.trim_matches(|c| c == '"' || c == '\'').to_string())
-        })
-        .next_back()
 }
 
 const REGISTRATION_PREFIX: &str = "tun-";
@@ -409,69 +395,50 @@ mod tests {
 
     #[test]
     fn truncation_is_on_by_default_with_no_overrides() {
-        assert!(truncation_default_is_on(""));
+        assert!(truncation_enabled(""));
     }
 
     #[test]
     fn truncation_is_on_only_for_affirmative_values() {
         for v in ["y", "Y", "yes", "YES", "Yes"] {
-            let src = format!("TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS={v}\n");
-            assert!(truncation_default_is_on(&src), "{v:?} should truncate");
+            assert!(
+                truncation_enabled(&format!("{TRUNCATE_KNOB}={v}\n")),
+                "{v:?} should truncate"
+            );
         }
         for v in ["n", "no", "NO", "0", "false", "off", "anything-else"] {
-            let src = format!("TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS={v}\n");
-            assert!(!truncation_default_is_on(&src), "{v:?} should not truncate");
+            assert!(
+                !truncation_enabled(&format!("{TRUNCATE_KNOB}={v}\n")),
+                "{v:?} should not truncate"
+            );
         }
     }
 
     #[test]
     fn an_empty_assignment_falls_back_to_the_default() {
-        // `[ -z "$VAR" ]` in the script treats VAR= as unset.
-        assert!(truncation_default_is_on(
-            "TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=\n"
-        ));
-    }
-
-    #[test]
-    fn the_legacy_variable_name_is_honored_when_the_current_one_is_unset() {
-        assert!(!truncation_default_is_on(
-            "TRUNCATE_NAMESERVER_LIST_AFTER_127=no\n"
-        ));
-        assert!(truncation_default_is_on(
-            "TRUNCATE_NAMESERVER_LIST_AFTER_127=yes\n"
-        ));
-    }
-
-    #[test]
-    fn the_current_variable_name_wins_over_the_legacy_one() {
-        let src = "TRUNCATE_NAMESERVER_LIST_AFTER_127=yes\n\
-                   TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no\n";
-        assert!(!truncation_default_is_on(src));
+        assert!(truncation_enabled(&format!("{TRUNCATE_KNOB}=\n")));
     }
 
     #[test]
     fn the_last_assignment_wins() {
-        let src = "TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no\n\
-                   TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=yes\n";
-        assert!(truncation_default_is_on(src));
+        assert!(truncation_enabled(&format!(
+            "{TRUNCATE_KNOB}=no\n{TRUNCATE_KNOB}=yes\n"
+        )));
     }
 
     #[test]
-    fn assignments_with_export_quotes_and_comments_are_parsed() {
-        assert!(!truncation_default_is_on(
-            "  export TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=\"no\"  # split DNS here\n"
-        ));
-        assert_eq!(
-            last_sh_assignment("TRUNCATE_X='yes' # trailing\n", "TRUNCATE_X").as_deref(),
-            Some("yes")
-        );
+    fn a_quoted_value_with_a_trailing_comment_is_parsed() {
+        assert!(!truncation_enabled(&format!(
+            "{TRUNCATE_KNOB}=\"no\"  # split DNS here\n"
+        )));
+        assert!(truncation_enabled(&format!(
+            "{TRUNCATE_KNOB}='y' # keep it on\n"
+        )));
     }
 
     #[test]
     fn a_commented_out_assignment_is_ignored() {
-        assert!(truncation_default_is_on(
-            "# TRUNCATE_NAMESERVER_LIST_AFTER_LOOPBACK_ADDRESS=no\n"
-        ));
+        assert!(truncation_enabled(&format!("# {TRUNCATE_KNOB}=no\n")));
     }
 
     #[test]
