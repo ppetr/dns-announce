@@ -41,6 +41,15 @@ pub struct Query {
     pub kind: RecordKind,
 }
 
+impl Query {
+    /// Builds a `Query` directly, e.g. for a `Resolver` implementor's own unit tests - the
+    /// `#[non_exhaustive]` attribute above otherwise blocks struct-literal construction from
+    /// outside this crate even though both fields are public.
+    pub fn new(name: impl Into<String>, kind: RecordKind) -> Self {
+        Self { name: name.into(), kind }
+    }
+}
+
 /// Record type of a [`Query`]. Anything this server cannot express as an
 /// address is collapsed into [`RecordKind::Other`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

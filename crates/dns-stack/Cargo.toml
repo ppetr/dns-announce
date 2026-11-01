@@ -1,6 +1,6 @@
 [package]
 name = "dns-stack"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.65"
 description = "A minimal DNS server and RA/RDNSS (RFC 8106) beacon backed by an application-supplied resolver. Transport-agnostic: raw packets in and out over channels, no socket or OS API of its own."
