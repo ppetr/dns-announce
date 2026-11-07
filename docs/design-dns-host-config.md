@@ -403,6 +403,14 @@ deliberately a hard refusal rather than an attempt to auto-supplement
 callers are expected to fix affected hosts to not rely solely on
 `FallbackDNS=` rather than work around it here.
 
+Verified end to end in `docker/systemd_resolved_no_fallback.bats`
+(`tests/no_fallback_resolver_linux.rs`): a container with only `dummy0` up
+(no second link, no global `DNS=`), asserting `set()` returns
+`Error::NoFallbackResolver` rather than succeeding. A separate container
+from `systemd_resolved.bats`, since that one always configures a
+default-route link for the other tests it shares, which would defeat this
+scenario.
+
 ### macOS: two backends, pick based on intent
 
 * `resolver_files` (native `/etc/resolver/<suffix>`, one file per routing
