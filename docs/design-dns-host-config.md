@@ -371,6 +371,38 @@ code path:
   end to end, no DNS manager present at all so `probe()` falls all the
   way through to it directly.
 
+#### systemd-resolved caveat: hosts with no real resolver at all
+
+Unlike the REFUSED-fallback backends above, `systemd-resolved` does real
+per-query domain routing - but that only covers queries *under*
+`routing_domains`. Everything else still needs the host to have a real
+catch-all resolver (global `DNS=`, or another link carrying the default
+route) for the OS-level fallback (`resolved`'s `FallbackDNS=`) to ever
+matter: `resolved` only uses `FallbackDNS=` when it has *no* DNS server
+configured anywhere, global or per-link. Add a routing-only domain to one
+link, and `resolved` immediately stops using `FallbackDNS=` system-wide -
+if nothing else was configured, every query outside the new routing domain
+now has nowhere to go.
+
+This isn't hypothetical: confirmed from a real incident (2026-11-06, see
+memory for the full journalctl analysis) where a host relying entirely on
+`FallbackDNS=` lost all non-VPN DNS for ~4.5 minutes the moment a `tun`
+link got a `~p2p`-scoped server. A second reproduction (2026-11-07)
+confirmed the daemon's own shutdown/crash handling isn't the issue - both
+a clean stop and `kill -9` recover in 1-2s via the kernel tearing down the
+TUN device, independent of any explicit D-Bus cleanup call - so the fix
+belongs entirely here, not in the caller's lifecycle handling.
+
+`SystemdResolved::set()` now refuses with `Error::NoFallbackResolver`
+when `routing_domains` is non-empty and the live `Manager.DNS` D-Bus
+property is empty, rather than silently taking down the rest of the
+host's DNS. Deliberately a coarse check ("is *any* DNS configured
+anywhere", not "is there still a specific catch-all route") and
+deliberately a hard refusal rather than an attempt to auto-supplement
+`FallbackDNS=` servers onto our own link - simpler, and sufficient given
+callers are expected to fix affected hosts to not rely solely on
+`FallbackDNS=` rather than work around it here.
+
 ### macOS: two backends, pick based on intent
 
 * `resolver_files` (native `/etc/resolver/<suffix>`, one file per routing

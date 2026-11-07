@@ -24,6 +24,24 @@
 //! So `probe()` also checks that `/etc/resolv.conf` is still symlinked
 //! into `resolved`'s own runtime directory before returning a backend at
 //! all.
+//!
+//! ## Known limitation: hosts with no real resolver
+//!
+//! `resolved` only falls back to its own `FallbackDNS=` servers when it has
+//! *no* DNS server configured anywhere, global or per-link. A routing-only
+//! domain (non-empty `routing_domains`) doesn't change that: once `set()`
+//! adds one, `resolved` stops using `FallbackDNS=` globally, but the new
+//! link only answers for its own domain - so a host that was relying
+//! entirely on `FallbackDNS=` loses every other query. `set()` therefore
+//! checks the live `Manager.DNS` D-Bus property first and refuses with
+//! [`Error::NoFallbackResolver`] if it's empty, rather than silently taking
+//! down the rest of the host's DNS. This is a coarse check - "is *any* DNS
+//! server configured anywhere" - not a precise "is there still a catch-all
+//! route for anything outside `routing_domains`"; a host where every
+//! existing entry is itself scoped to an unrelated domain would pass this
+//! check without actually having a fallback, but that's a narrower, rarer
+//! case than the one this guards against. Confirmed against a real
+//! incident - see `docs/design-dns-host-config.md`.
 
 use std::fmt;
 use std::net::IpAddr;
@@ -42,6 +60,11 @@ pub enum Error {
     /// rather than treat this as "resolved is broken".
     NotAvailable(String),
     DBus(zbus::Error),
+    /// `routing_domains` is non-empty, but the host has no other DNS
+    /// server configured anywhere (global or per-link) - it's relying
+    /// entirely on `resolved`'s `FallbackDNS=`. See "Known limitation" in
+    /// the module docs for why that makes a routing-only domain unsafe.
+    NoFallbackResolver,
 }
 
 impl fmt::Display for Error {
@@ -49,6 +72,13 @@ impl fmt::Display for Error {
         match self {
             Error::NotAvailable(msg) => write!(f, "systemd-resolved not usable: {msg}"),
             Error::DBus(e) => write!(f, "systemd-resolved D-Bus call failed: {e}"),
+            Error::NoFallbackResolver => write!(
+                f,
+                "refusing to add a routing-only DNS server: this host has no other \
+                 DNS configured anywhere and is relying entirely on systemd-resolved's \
+                 FallbackDNS=; adding a routing-only domain would make resolved stop \
+                 using it, breaking every query outside that domain"
+            ),
         }
     }
 }
@@ -68,6 +98,13 @@ impl From<zbus::Error> for Error {
 )]
 trait Resolve1Manager {
     fn get_link(&self, ifindex: i32) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+
+    /// Every DNS server `resolved` currently has configured, globally and
+    /// on every link, as `(ifindex, family, address)` tuples - `ifindex ==
+    /// 0` means global. Checked by `set()` before adding a routing-only
+    /// domain - see "Known limitation" in the module docs.
+    #[zbus(property, name = "DNS")]
+    fn dns(&self) -> zbus::Result<Vec<(i32, i32, Vec<u8>)>>;
 }
 
 #[zbus::proxy(
@@ -116,6 +153,16 @@ impl SystemdResolved {
             .build()
             .await?)
     }
+
+    /// Whether `resolved` has *any* DNS server configured right now,
+    /// anywhere on the host - global or on any link. Empty means the host
+    /// is relying entirely on `FallbackDNS=` (see `Error::NoFallbackResolver`).
+    /// A coarse check, not a precise "is there a catch-all route" one - see
+    /// "Known limitation" in the module docs.
+    async fn has_any_dns_configured(&self) -> Result<bool, Error> {
+        let manager = Resolve1ManagerProxy::new(&self.connection).await?;
+        Ok(!manager.dns().await?.is_empty())
+    }
 }
 
 #[async_trait::async_trait]
@@ -123,6 +170,10 @@ impl DnsRoute for SystemdResolved {
     type Error = Error;
 
     async fn set(&mut self, interface: &str, config: &DnsRouteConfig) -> Result<(), Error> {
+        if !config.routing_domains.is_empty() && !self.has_any_dns_configured().await? {
+            return Err(Error::NoFallbackResolver);
+        }
+
         let idx = ifindex(Path::new("/sys/class/net"), interface)?;
         let link = self.link_proxy(idx).await?;
 
