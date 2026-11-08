@@ -14,7 +14,7 @@
 
 [package]
 name = "dns-host-config"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.65"
 description = "Push a DNS resolver + routing domain into a host's DNS configuration (systemd-resolved, and more to come) and withdraw it again. Independent of any particular DNS server implementation."

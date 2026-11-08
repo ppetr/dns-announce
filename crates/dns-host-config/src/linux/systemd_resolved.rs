@@ -43,6 +43,7 @@
 //! case than the one this guards against. Confirmed against a real
 //! incident - see `docs/design-dns-host-config.md`.
 
+use std::ffi::CStr;
 use std::fmt;
 use std::net::IpAddr;
 use std::path::Path;
@@ -51,6 +52,12 @@ use crate::{DnsRoute, DnsRouteConfig};
 
 const AF_INET: i32 = 2;
 const AF_INET6: i32 = 10;
+
+/// The D-Bus error name `resolve1` returns when polkit refuses a call for lack of an explicit
+/// rule, rather than because the action is actually denied. See
+/// [`Error::InteractiveAuthorizationRequired`].
+const INTERACTIVE_AUTH_REQUIRED: &str =
+    "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired";
 
 #[derive(Debug)]
 pub enum Error {
@@ -65,6 +72,15 @@ pub enum Error {
     /// entirely on `resolved`'s `FallbackDNS=`. See "Known limitation" in
     /// the module docs for why that makes a routing-only domain unsafe.
     NoFallbackResolver,
+    /// `resolve1`'s `SetDNS`/`SetDomains` need polkit's `auth_admin` by default - i.e. root, or
+    /// an interactively authenticated admin session. A session-less daemon running as its own
+    /// unix user has neither, and can never complete interactive authentication either, so this
+    /// is permanent, not transient: it needs an explicit polkit rule trusting `user` for these
+    /// two actions. See this variant's `Display` for ready-to-install rules in both polkit rule
+    /// formats.
+    InteractiveAuthorizationRequired {
+        user: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -79,6 +95,37 @@ impl fmt::Display for Error {
                  FallbackDNS=; adding a routing-only domain would make resolved stop \
                  using it, breaking every query outside that domain"
             ),
+            Error::InteractiveAuthorizationRequired { user } => write!(
+                f,
+                "systemd-resolved refused this call: interactive authorization required. The \
+                 user this process runs as ('{user}') has no polkit rule allowing resolve1's \
+                 SetDNS/SetDomains, and being a session-less daemon it can never complete \
+                 interactive admin authentication either. Install one of the following - both \
+                 are safe to install together, since each polkit version reads only the one it \
+                 understands and ignores the other:\n\
+                 \n\
+                 Modern polkit (>= 0.106, i.e. effectively every current distro) - install as \
+                 /etc/polkit-1/rules.d/<name>.rules:\n\
+                 \n\
+                 polkit.addRule(function(action, subject) {{\n\
+                 \x20   if ((action.id == \"org.freedesktop.resolve1.set-dns-servers\" ||\n\
+                 \x20        action.id == \"org.freedesktop.resolve1.set-domains\") &&\n\
+                 \x20       subject.user == \"{user}\") {{\n\
+                 \x20       return polkit.Result.YES;\n\
+                 \x20   }}\n\
+                 }});\n\
+                 \n\
+                 Legacy polkit (<= 0.105, or newer with the polkit-pkla-compat / polkitd-pkla \
+                 package installed) - install as \
+                 /etc/polkit-1/localauthority/50-local.d/<name>.pkla:\n\
+                 \n\
+                 [Allow {user} to manage systemd-resolved without interactive authentication]\n\
+                 Identity=unix-user:{user}\n\
+                 Action=org.freedesktop.resolve1.set-dns-servers;org.freedesktop.resolve1.set-domains\n\
+                 ResultAny=yes\n\
+                 ResultInactive=yes\n\
+                 ResultActive=yes"
+            ),
         }
     }
 }
@@ -87,8 +134,44 @@ impl std::error::Error for Error {}
 
 impl From<zbus::Error> for Error {
     fn from(e: zbus::Error) -> Self {
+        if let zbus::Error::MethodError(name, _, _) = &e {
+            if is_interactive_auth_required(name.as_str()) {
+                return Error::InteractiveAuthorizationRequired {
+                    user: current_user_hint(),
+                };
+            }
+        }
         Error::DBus(e)
     }
+}
+
+fn is_interactive_auth_required(dbus_error_name: &str) -> bool {
+    dbus_error_name == INTERACTIVE_AUTH_REQUIRED
+}
+
+/// Best-effort name of the unix user this process runs as, for the polkit rule hint in
+/// [`Error::InteractiveAuthorizationRequired`]'s `Display`. Falls back to the numeric uid if an
+/// NSS lookup finds no matching `/etc/passwd` entry.
+fn current_user_hint() -> String {
+    let uid = unsafe { libc::getuid() };
+    let mut buf = [0u8; 1024];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &mut pwd,
+            buf.as_mut_ptr() as *mut libc::c_char,
+            buf.len(),
+            &mut result,
+        )
+    };
+    if rc == 0 && !result.is_null() {
+        if let Ok(name) = unsafe { CStr::from_ptr(pwd.pw_name) }.to_str() {
+            return name.to_string();
+        }
+    }
+    format!("uid {uid}")
 }
 
 #[zbus::proxy(
@@ -337,5 +420,34 @@ mod tests {
             ifindex(dir.path(), "eth7"),
             Err(Error::NotAvailable(_))
         ));
+    }
+
+    #[test]
+    fn recognizes_the_interactive_auth_required_dbus_error_name() {
+        assert!(is_interactive_auth_required(
+            "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"
+        ));
+        assert!(!is_interactive_auth_required(
+            "org.freedesktop.DBus.Error.AccessDenied"
+        ));
+    }
+
+    #[test]
+    fn current_user_hint_is_never_empty() {
+        assert!(!current_user_hint().is_empty());
+    }
+
+    #[test]
+    fn interactive_auth_required_message_shows_both_polkit_rule_formats() {
+        let err = Error::InteractiveAuthorizationRequired {
+            user: "zeroconf-p2p-vpn".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("subject.user == \"zeroconf-p2p-vpn\""));
+        assert!(msg.contains("Identity=unix-user:zeroconf-p2p-vpn"));
+        assert!(msg.contains("org.freedesktop.resolve1.set-dns-servers"));
+        assert!(msg.contains("org.freedesktop.resolve1.set-domains"));
+        assert!(msg.contains(">= 0.106"));
+        assert!(msg.contains("<= 0.105"));
     }
 }
